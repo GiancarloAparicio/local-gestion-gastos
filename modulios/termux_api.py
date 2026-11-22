@@ -129,6 +129,71 @@ class TermuxAPI:
             logger.warning(f"⚠️ Salida no JSON del diálogo: {output}")
             return {"raw": output}
 
+
+    def obtener_gps(self, timeout: int = 15) -> Optional[Dict[str, Any]]:
+        """Obtiene ubicación GPS con fallback a base de datos.
+
+        Primero intenta obtener GPS en tiempo real con termux-location.
+        Si falla o se demora mucho, usa la última ubicación guardada en la base de datos.
+
+        Args:
+            timeout: Segundos máxima espera para termux-location (default 15s)
+
+        Returns:
+            Diccionario con lat, lng y fuente_gps, o None si no hay datos
+        """
+        import json
+        import subprocess
+        import sqlite3
+
+        # 1. Intentar GPS en tiempo real
+        try:
+            result = subprocess.run(
+                ['termux-location', '-g', str(timeout)],
+                capture_output=True, text=True, timeout=timeout + 5
+            )
+
+            if result.returncode == 0 and result.stdout.strip():
+                data = json.loads(result.stdout.strip())
+                lat = data.get('latitude')
+                lng = data.get('longitude')
+
+                if lat is not None and lng is not None:
+                    return {
+                        'latitud': float(lat),
+                        'longitud': float(lng),
+                        'fuente_gps': 'live'
+                    }
+        except Exception as e:
+            logger.warning(f"⚠️ GPS tiempo real falló: {e}")
+
+        # 2. Fallback: Usar última ubicación guardada en base de datos
+        try:
+            db_path = self.db_ruta if hasattr(self, 'db_ruta') else 'local_gastos.db'
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT latitud, longitud, fuente_gps "
+                "FROM transacciones "
+                "WHERE latitud IS NOT NULL AND longitud IS NOT NULL "
+                "ORDER BY fecha_hora_epoch DESC LIMIT 1"
+            )
+            row = cursor.fetchone()
+            conn.close()
+
+            if row:
+                lat, lng, fuente = row
+                return {
+                    'latitud': float(lat),
+                    'longitud': float(lng),
+                    'fuente_gps': fuente
+                }
+        except Exception as e:
+            logger.error(f"❌ Error en fallback GPS BD: {e}")
+
+        return None
+
+
     def solicitar_motivo_contexto(self, es_gasto: bool, titulo_notificacion: str = "", app_nombre: str = "") -> str:
         """Solicita el motivo al usuario con contexto sobre el tipo de movimiento y la aplicación.
         

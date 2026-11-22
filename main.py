@@ -9,15 +9,22 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from adaptadores.infraestructura.sqlite_adapter import SQLiteAdapter
+from modulios.fifo_cola import FIFOCola
 
 
 def main():
+    # Cargar configuración desde config.yaml
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.yaml')
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+
     parser = argparse.ArgumentParser(description="Sistema local-gestion-gastos")
     parser.add_argument(
         "--accion",
-        choices=["listar", "sync", "insert"],
+        choices=["listar", "sync", "insert", "fifo", "listener"],
         default="listar",
-        help="Acción a realizar",
+        help="Acción a realizar: listar (ver transacciones), sync (sincronizar con nube), "
+             "insert (insertar manual), fifo (procesar archivos Automate), listener (capturar notificaciones directas)",
     )
     parser.add_argument(
         "--motivo",
@@ -42,6 +49,21 @@ def main():
         type=str,
         default="",
         help="Persona o comercio (para modo manual)",
+    )
+    # El directorio viene de config.yaml por defecto; --directorio solo si se quiere sobreescribir
+    parser.add_argument(
+        "--directorio",
+        type=str,
+        default=config.get('directorio_archivos_automate', '/sdcard/Automate/notify'),
+        help="Directorio donde Automate deja los archivos JSON (sobreescribe config.yaml). "
+             "Default leído de config.yaml: directorio_archivos_automate",
+    )
+    parser.add_argument(
+        "--modo",
+        choices=["automate_broker", "listener_directo"],
+        default="automate_broker",
+        help="Modo de operación: automate_broker (procesa archivos JSON de Automate) o "
+             "listener_directo (captura notificaciones directas via Termux API)",
     )
 
     args = parser.parse_args()
@@ -128,6 +150,23 @@ def main():
         print(f"   Tipo: {args.tipo}")
         print(f"   Destinatario: {args.destinatario}")
         print(f"   Sincronizado: NO (0) - Ejecute 'python3 main.py --sync' para enviar a la nube")
+
+    elif args.accion == "fifo":
+        """Procesar archivos del directorio con el modo Automate Broker."""
+        directorio = args.directorio or os.getenv(
+            "DIRECTORIO_NOTIFICACIONES", "/sdcard/Automate/notify"
+        )
+        print(f"\n🔄 Modo Automate Broker: procesando archivos de {directorio}")
+        fifo = FIFOCola(directorio_monitor=directorio, modo_operacion=args.modo)
+        fifo.iniciar()
+
+    elif args.accion == "listener":
+        """Capturar notificaciones directas modo listener_directo."""
+        print(f"\n🔄 Modo Listener Directo: capturando notificaciones")
+        directorio = args.directorio or "/tmp/termux_notifications"
+        os.makedirs(directorio, exist_ok=True)
+        fifo = FIFOCola(directorio_monitor=directorio, modo_operacion=args.modo)
+        fifo.iniciar()
 
     # Ya no llamamos a db.cerrar_conexion() explícitamente;
     # Python hará cleanup al finalizar el script

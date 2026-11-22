@@ -41,6 +41,15 @@ mapeo_adaptadores:
   com.bcp.innovacxion.yapeapp: "yape"
   # Más mapeos pueden añadirse aquí
 
+# --- Directorio de Archivos Automate ---
+# Directorio donde la app Automate deja los archivos JSON con los datos de notificación.
+# Este es el path por defecto que el sistema leerá al iniciar en modo automate_broker.
+# En Android typically: /sdcard/Automate/notify
+directorio_archivos_automate: "/sdcard/Automate/notify"
+  # Puedo personalizar esto según el entorno:
+  # - En Termux/Linux: /home/usuario/Automate/notify
+  # - En Android real: /sdcard/Automate/notify
+
 # --- Credenciales (cargar de variables de entorno .env) ---
 credenciales:
   google_cloud_func_url: "${GOOGLE_CLOUD_FUNC_URL}"
