@@ -1,0 +1,46 @@
+# Configuración central - local-gestion-gastos
+# Esta archivo concentra toda la configuración del sistema, desde el tipo de
+# base de datos hasta el modo de operación y los bancos activos.
+
+# --- Configuración de Base de Datos ---
+bd:
+  tipo: "sqlite"  # "postgresql" o "mysql" en futuro
+  ruta_sqlite: "./local_gastos.db"
+
+# --- Modo de Operación ---
+modo_operacion: "automate_broker"  # "automate_broker" o "listener_directo"
+
+# --- Ventana de Consolidación ---
+ventana_consolidacion:
+  minutos: 5  # Ventana de tiempo (en minutos) para consolidar múltiples alertas
+  # Criterios: mismo tipo + mismo monto ±10% dentro de la ventana
+
+# --- Procesamiento ---
+procesamiento:
+  tiempo_espera_gps_segundos: 10
+  tiempo_espera_dialogo_segundos: 30
+  maximo_intentos_sincronizacion: 3
+  backoff_espera_segundos: [5, 10, 30]  # Reintentos exponenciales
+
+# --- Adaptadores Activos ---
+# Los adaptadores que se cargarán al iniciar el sistema
+adaptadores_activos:
+  - "yape"
+  - "ibk"
+  - "bbva"
+  - # "nfc" - por habilitar
+  - # "compartamos" - por habilitar
+  - # "manual" - se usa vía CLI
+
+# --- Credenciales (cargar de variables de entorno .env) ---
+credenciales:
+  google_cloud_func_url: "${GOOGLE_CLOUD_FUNC_URL}"
+  google_sheets_id: "${GOOGLE_SHEETS_ID}"
+  looker_studio_url: "${LOOKER_STUDIO_URL}"
+
+# --- Configuración de Registro ---
+logging:
+  nivel: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  archivo: "./logs/app.log"
+  rotacion: "10 MB"
+ _retencion_dias: 30
