@@ -12,7 +12,11 @@ Formato esperado de notificación Compartamos:
 import re
 import uuid
 import time
+import os
 from datetime import datetime
+
+# Importar Termux API para diálogos
+from modulios.termux_api import termux_api
 
 
 class CompartamosAdapter:
@@ -60,21 +64,21 @@ class CompartamosAdapter:
         else:
             monto = 0.0
 
+        # 2. Solicitar remitente/beneficiario vía termux-dialog
+        # Usar termux-dialog text para obtener el nombre del beneficiario
+        beneficiario = self._solicitar_beneficiario_termux()
+
         # 3. Tipo: Compartamos siempre es ingreso
         tipo = "ingreso"
 
-        # 4. Extraer beneficiario/remitente del title
-        titulo = datos_crudos.get("title") or ""
-        beneficiario = titulo if titulo else "desconocido"
-
-        # 5. Generar event_id UUID
+        # 4. Generar event_id UUID
         notification_id = datos_crudos.get("id", "")
         if notification_id and notification_id not in ("", "0"):
             event_id = str(notification_id)
         else:
             event_id = str(uuid.uuid4())
 
-        # 6. Fecha hora
+        # 5. Fecha hora
         when = datos_crudos.get("when") or datos_crudos.get("timestamp")
         if when:
             try:
@@ -85,7 +89,7 @@ class CompartamosAdapter:
         else:
             fecha_hora = datetime.now().isoformat()
 
-        # 7. Validar duplicados en ventana corta
+        # 6. Validar duplicados en ventana corta
         # Revisar si ya existe un ingreso con mismo monto en ventana de 10 min
         es_duplicado = False
         timestamp_epoch = datos_crudos.get("when", datos_crudos.get("timestamp", time.time()))
@@ -104,7 +108,7 @@ class CompartamosAdapter:
         except (ValueError, TypeError):
             es_duplicado = False
 
-        # 8. Constructar diccionario normalizado
+        # 7. Constructar diccionario normalizado
         normalizado = {
             "monto": monto,
             "tipo": tipo,
@@ -113,10 +117,10 @@ class CompartamosAdapter:
             "canal": "compartamos",
             "fecha_hora": fecha_hora,
             "mensaje_raw": mensaje,
-            "motivo": None,  # Se solicitará al usuario vía termux-dialog
+            "motivo": self._solicitar_motivo_termux(),  # Solicitado vía termux-dialog
             "fuente": "por definir",
             "origen_paquete": datos_crudos.get("package", ""),
-            "titulo_visual": titulo,
+            "titulo_visual": datos_crudos.get("title", ""),
             "timestamp_epoch": timestamp_epoch,
             # Flags y metadatos Compartamos-specific
             "es_duplicado": es_duplicado,
@@ -124,3 +128,58 @@ class CompartamosAdapter:
         }
 
         return normalizado
+
+    def _solicitar_beneficiario_termux(self) -> str:
+        """Solicita el beneficiario/remitente usando termux-dialog.
+
+        Returns:
+            Nombre del beneficiario ingresado por el usuario
+        """
+        # Usar termux-dialog text para ingresar el beneficiario
+        try:
+            resultado = termux_api.mostrar_dialogo(
+                widget="text",
+                titulo="Beneficiario",
+                mensaje="Nombre del beneficiario o remitente:",
+            )
+
+            if resultado and "text" in resultado:
+                beneficiario = resultado["text"].strip()
+                if beneficiario:
+                    return beneficiario
+                return "desconocido"
+            else:
+                return "desconocido"
+        except Exception as e:
+            logger_warning = None
+            try:
+                import logging
+                logger_warning = logging.getLogger(__name__)
+            except:
+                pass
+            # Fallback si termux-dialog falla
+            return "desconocido"
+
+    def _solicitar_motivo_termux(self) -> str:
+        """Solicita el motivo usando termux-dialog.
+
+        Returns:
+            Motivo ingresado por el usuario
+        """
+        try:
+            resultado = termux_api.mostrar_dialogo(
+                widget="text",
+                titulo="Motivo del movimiento",
+                mensaje="¿Cuál fue el motivo de este ingreso?",
+            )
+
+            if resultado and "text" in resultado:
+                motivo = resultado["text"].strip()
+                if motivo:
+                    return motivo
+                return "Sin motivo especificado"
+            else:
+                return "Sin motivo especificado"
+        except Exception as e:
+            # Fallback: retornar motivo por defecto
+            return "Sin motivo especificado"

@@ -32,6 +32,15 @@ adaptadores_activos:
   - # "compartamos" - por habilitar
   - # "manual" - se usa vía CLI
 
+# --- Mapeo de Paquetes a Adaptadores ---
+# Configuración del paquete (property "package" del JSON de Automate)
+# para decidir qué adaptador usar. Las claves son los patrones de paquete
+# y los valores son los nombres de los adaptadores (sin el sufijo "Adapter").
+mapeo_adaptadores:
+  pe.com.interbank.mobilebanking: "ibk"
+  com.bcp.innovacxion.yapeapp: "yape"
+  # Más mapeos pueden añadirse aquí
+
 # --- Credenciales (cargar de variables de entorno .env) ---
 credenciales:
   google_cloud_func_url: "${GOOGLE_CLOUD_FUNC_URL}"
@@ -43,4 +52,4 @@ logging:
   nivel: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
   archivo: "./logs/app.log"
   rotacion: "10 MB"
- _retencion_dias: 30
+  _retencion_dias: 30

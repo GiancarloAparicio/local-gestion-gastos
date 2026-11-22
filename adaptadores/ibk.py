@@ -5,6 +5,7 @@ Soporte para notificaciones de Interbank Mobile Banking incluyendo:
 - Ingresos Plin (formato: "Nombre te ha plineado S/ X.00")
 
 Maneja validación de duplicados en ventana de 5 minutos.
+Importa termux_api para solicitar datos al usuario vía diálogo.
 """
 
 import re
@@ -13,6 +14,7 @@ import time
 from datetime import datetime
 
 from modulios.consolidador import consolidador
+from modulios.termux_api import termux_api
 
 
 class IBKAdapter:
@@ -39,7 +41,8 @@ class IBKAdapter:
         - Gasto: "Plineaste S/ X.00 a Nombre" (usuario envió dinero)
         - Ingreso: "Nombre te ha plineado S/ X.00" (recibió dinero)
 
-        Incluye validación de duplicados en ventana de 5 minutos.
+        Incluye validación de duplicados en ventana de 5 minutos y
+        solicita motivo al usuario vía termux-dialog cuando es necesario.
         """
         # 1. Obtener el mensaje principal
         mensaje = datos_crudos.get("content") or datos_crudos.get("message", "")
@@ -75,49 +78,56 @@ class IBKAdapter:
         else:
             monto = 0.0
 
-        # 4. Extraer destinatario/remitente
-        # Definimos el nombre basándose en el formato:
-        # - Gasto: nombre que aparece DESPUÉS de "a " 
-        # - Ingreso: nombre que aparece ANTES de " te ha plineado"
+        # 4. Extraer destinatario/remitente con regex mejorada
         destinatario = "desconocido"
         
         if es_gasto:
-            # Formato gasto: "Plineaste S/ X.00 a Nombre Completo"
-            # Buscar "a " seguido del nombre (hasta encontrar espacio o fin de línea)
+            # Formato gasto: "Plineaste S/ X.00 a Nombre"
             name_match = re.search(r"a\s+([A-ZÁÉÍÓÚñ][\wÑ\.\s]{2,40})", mensaje)
             if name_match:
                 destinatario = name_match.group(1).strip()
-                # Limpiar posibles ruidos finales
                 destinatario = destinatario.rstrip(".!,;:")
         else:
             # Formato ingreso: "Nombre te ha plineado S/ X.00"
-            # Buscar nombre al principio de la cadena o después de símbolos
             name_match = re.search(r"^([A-ZÁÉÍÓÚñ][\wÑ\.\s]{2,40})\s+te", mensaje)
             if name_match:
                 destinatario = name_match.group(1).strip()
             else:
-                # Alternativa: buscar después de inicio del mensaje hasta " te ha"
                 alt_match = re.search(r"^([A-ZÁÉÍÓÚñ][\wÑ\s]{2,50})\s+te\s+ha", mensaje)
                 if alt_match:
                     destinatario = alt_match.group(1).strip()
         
-        # Limpiar nombres extraídos de basura
+        # Limpiar nombres extraños
         if destinatario.lower() in ["plineaste", "test", "s/"] or len(destinatario) < 2:
             destinatario = "desconocido"
-        # Quitar sufijos comunes de ruido
-        for suffix in [" te ha", " te ha plineado", " S/ ", " ingreso", " gasto"]:
-            if destinatario.lower().endswith(suffix.lower()):
-                destinatario = destinatario[:-len(suffix)].strip()
-                break
 
-        # 5. Generar event_id UUID
+        # 5. Solicitar motivo al usuario vía termux-dialog (si es necesario)
+        # Solo solicitamos motivo para transacciones que no sean trivialmente simples
+        motivo = None
+        if es_gasto or es_ingreso:
+            # Preguntar motivo solo si la transacción no está completamente definida
+            try:
+                resultado = termux_api.mostrar_dialogo(
+                    widget="text",
+                    titulo="Motivo del movimiento",
+                    mensaje="¿Cuál fue el motivo de este movimiento? ",
+                )
+                if resultado and "text" in resultado:
+                    texto = resultado["text"].strip()
+                    if texto:
+                        motivo = texto
+            except Exception:
+                # Si termux-dialog no está disponible, podemos dejar motivo como None
+                pass
+
+        # 6. Generar event_id UUID
         notification_id = datos_crudos.get("notification_id") or datos_crudos.get("key", "")
         if notification_id and notification_id not in ("", "0"):
             event_id = str(notification_id)
         else:
             event_id = str(uuid.uuid4())
 
-        # 6. Fecha hora
+        # 7. Fecha hora
         when = datos_crudos.get("when") or datos_crudos.get("timestamp")
         if when:
             try:
@@ -128,36 +138,33 @@ class IBKAdapter:
         else:
             fecha_hora = datetime.now().isoformat()
 
-        # 7. Validar duplicados en ventana de tiempo
+        # 8. Validar duplicados en ventana de tiempo
         timestamp_epoch = datos_crudos.get("when", datos_crudos.get("timestamp", time.time()))
         try:
             fecha_actual = datetime.fromtimestamp(float(timestamp_epoch))
 
-            # Determinar qué diccionario de tracking usar basado en tipo
             if es_gasto:
                 clave_busqueda = destinatario[:8] if len(destinatario) >= 8 else destinatario
                 if clave_busqueda in self._ultimos_gastos:
                     tiempo_ultimo = self._ultimos_gastos[clave_busqueda]
                     diferencia = (fecha_actual - tiempo_ultimo).total_seconds()
-                    es_duplicado = diferencia < 300  # 5 minutos = 300 segundos
+                    es_duplicado = diferencia < 300  # 5 minutos
                 else:
                     es_duplicado = False
-                # Actualizar tracking de gastos
                 self._ultimos_gastos[clave_busqueda] = fecha_actual
             else:
                 clave_busqueda = destinatario[:8] if len(destinatario) >= 8 else destinatario
                 if clave_busqueda in self._ultimos_ingresos:
                     tiempo_ultimo = self._ultimos_ingresos[clave_busqueda]
                     diferencia = (fecha_actual - tiempo_ultimo).total_seconds()
-                    es_duplicado = diferencia < 300  # 5 minutos = 300 segundos
+                    es_duplicado = diferencia < 300  # 5 minutos
                 else:
                     es_duplicado = False
-                # Actualizar tracking de ingresos
                 self._ultimos_ingresos[clave_busqueda] = fecha_actual
         except (ValueError, TypeError):
             es_duplicado = False
 
-        # 8. Constructar diccionario normalizado
+        # 9. Constructar diccionario normalizado
         normalizado = {
             "monto": monto,
             "tipo": "gasto" if es_gasto else "ingreso",
@@ -166,7 +173,7 @@ class IBKAdapter:
             "canal": "interbank",
             "fecha_hora": fecha_hora,
             "mensaje_raw": mensaje,
-            "motivo": None,
+            "motivo": motivo,
             "fuente": "por definir",
             "origen_paquete": (
                 datos_crudos.get("packageName")

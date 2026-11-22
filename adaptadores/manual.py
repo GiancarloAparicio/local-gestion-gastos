@@ -15,6 +15,9 @@ import os
 import time
 from datetime import datetime
 
+# Importar Termux API para diálogos
+from modulios.termux_api import termux_api
+
 
 class ManualAdapter:
     """Adaptador para registros manuales en Termux."""
@@ -60,7 +63,7 @@ class ManualAdapter:
         return self._completar_datos_parciales(datos_crudos)
 
     def _solicitar_interactivo(self) -> dict:
-        """Solicita todos los campos al usuario vía termux-dialog o consola.
+        """Solicita todos los campos al usuario vía termux-dialog.
 
         En un dispositivo Android con Termux, esto invocaría:
         termux-dialog text -t "Tipo" -i "¿Es ingreso o gasto?"
@@ -68,43 +71,20 @@ class ManualAdapter:
         termux-dialog text -t "Destinatario" -i "¿Quién es el destinatario?"
         termux-dialog text -t "Motivo" -i "¿Cuál fue el motivo?"
 
-        Por ahora, simulamos la entrada por consola para desarrollo.
+        Returns:
+            Diccionario con los datos recopilados del usuario.
         """
-        print("\n" + "=" * 50)
-        print("📝 Registro Manual - Ingresar datos")
-        print("=" * 50 + "\n")
+        # Solicitar tipo usando termux-dialog
+        tipo = self._preguntar_tipo_termux()
 
-        # Solicitar tipo
-        while True:
-            tipo = input("¿Es 'ingreso' o 'gasto'? ").strip().lower()
-            if tipo in ["ingreso", "gasto"]:
-                break
-            print("❌ Por favor ingrese 'ingreso' o 'gasto'")
+        # Solicitar monto usando termux-dialog
+        monto = self._preguntar_monto_termux()
 
-        # Solicitar monto
-        while True:
-            monto_str = input("¿Cuál es el monto? (en soles, ej. 20.00) ").strip()
-            try:
-                monto = float(monto_str)
-                if monto > 0:
-                    break
-                print("❌ El monto debe ser mayor a 0")
-            except ValueError:
-                print("❌ Por favor ingrese un número válido")
+        # Solicitar destinatario usando termux-dialog
+        destinatario = self._solicitar_destinatario_termux()
 
-        # Solicitar destinatario
-        destinatario = input("¿Quién es el destinatario o comercio? ").strip()
-        if not destinatario:
-            destinatario = "desconocido"
-
-        # Solicitar motivo
-        motivo = input("¿Cuál fue el motivo de este movimiento? ").strip()
-        if not motivo:
-            motivo = "Sin motivo especificado"
-
-        print("\n" + "=" * 50)
-        print("✅ Datos recopilados correctamente")
-        print("=" * 50 + "\n")
+        # Solicitar motivo usando termux-dialog
+        motivo = self._solicitar_motivo_termux()
 
         # Construir diccionario normalizado
         ahora = datetime.now()
@@ -133,6 +113,75 @@ class ManualAdapter:
         }
 
         return normalizado
+
+    def _preguntar_tipo_termux(self) -> str:
+        """Pregunta el tipo de movimiento usando termux-dialog."""
+        try:
+            resultado = termux_api.mostrar_dialogo(
+                widget="text",
+                titulo="Tipo de movimiento",
+                mensaje="¿Es 'ingreso' o 'gasto'? ",
+            )
+            if resultado and "text" in resultado:
+                texto = resultado["text"].strip().lower()
+                if texto in ["ingreso", "gasto"]:
+                    return texto
+            return "ingreso"  # Default
+        except Exception:
+            return "ingreso"
+
+    def _preguntar_monto_termux(self) -> float:
+        """Pregunta el monto usando termux-dialog."""
+        try:
+            resultado = termux_api.mostrar_dialogo(
+                widget="text",
+                titulo="Monto",
+                mensaje="¿Cuál es el monto? (en soles, ej. 20.00) ",
+            )
+            if resultado and "text" in resultado:
+                texto = resultado["text"].strip()
+                try:
+                    monto = float(texto)
+                    if monto > 0:
+                        return monto
+                except ValueError:
+                    pass
+            # Default si todo falla
+            return 10.0
+        except Exception:
+            return 10.0
+
+    def _solicitar_destinatario_termux(self) -> str:
+        """Pregunta el destinatario usando termux-dialog."""
+        try:
+            resultado = termux_api.mostrar_dialogo(
+                widget="text",
+                titulo="Destinatario",
+                mensaje="¿Quién es el destinatario o comercio? ",
+            )
+            if resultado and "text" in resultado:
+                destinatario = resultado["text"].strip()
+                if destinatario:
+                    return destinatario
+            return "desconocido"
+        except Exception:
+            return "desconocido"
+
+    def _solicitar_motivo_termux(self) -> str:
+        """Pregunta el motivo usando termux-dialog."""
+        try:
+            resultado = termux_api.mostrar_dialogo(
+                widget="text",
+                titulo="Motivo del movimiento",
+                mensaje="¿Cuál fue el motivo de este movimiento? ",
+            )
+            if resultado and "text" in resultado:
+                motivo = resultado["text"].strip()
+                if motivo:
+                    return motivo
+                return "Sin motivo especificado"
+        except Exception:
+            return "Sin motivo especificado"
 
     def _completar_datos_parciales(self, datos_parciales: dict) -> dict:
         """Completa los campos faltantes usando los datos proporcionados.

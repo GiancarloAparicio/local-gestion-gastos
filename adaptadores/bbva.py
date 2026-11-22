@@ -7,13 +7,20 @@ por lo que el proceso solicita de forma guiada al usuario:
 3. Persona o comercio
 4. Motivo"""
 
-import uuid
 import re
+import uuid
+import time
 from datetime import datetime
+
+# Importar Termux API - SÓLO consumo, sin lógica propia de diálogo
+from modulios.termux_api import termux_api
 
 
 class BBVAAdapter:
     """Adaptador para notificaciones BBVA."""
+
+    def __init__(self):
+        pass
 
     def es_mis_notificacion(self, datos_crudos: dict) -> bool:
         """Determina si la notificación es de BBVA."""
@@ -30,32 +37,55 @@ class BBVAAdapter:
 
         A diferencia de otros bancos, BBVA requiere solicitar al usuario
         los datos completos ya que el mensaje no los contiene explícitamente.
-        En este adaptador, simulamos esa solicitud y construimos el diccionario."""
-        mensaje = datos_crudos.get("content") or datos_crudos.get("message", "")
+        En este adaptador, solicitamos todos los datos vía termux_api con contexto."""
 
-        # 1. Extraer monto si viene en el mensaje (aunque BBVA suele no incluírlo)
+        # 1. Solicitar tipo de movimiento (ingreso/gasto) con contexto BBVA
+        # Pasamos el título de la notificación y el nombre de la app para contexto
+        titulo_notificacion = datos_crudos.get("title", datos_crudos.get("titulo", ""))
+        tipo = termux_api.solicitar_motivo_contexto(
+            es_gasto=False,
+            titulo_notificacion=titulo_notificacion,
+            app_nombre="BBVA"
+        )
+
+        # 2. Solicitar monto vía termux_dialog (widget counter para números)
+        monto_respuesta = termux_api.mostrar_dialogo(
+            widget="counter",
+            titulo="Monto BBVA",
+            mensaje="¿Cuál es el monto? (en soles, ej. 20.00)",
+            r="1,10000,1",
+        )
         monto = 0.0
-        monto_match = re.search(r"S/\s*([\d,.]+)", mensaje)
-        if monto_match:
-            monto_str = monto_match.group(1)
-            # En formato peruano, el punto es decimal para números normales
-            # Pero BBVA a veces formatea de manera distinta, intentemos limpiar
+        if monto_respuesta and "r" in monto_respuesta:
             try:
-                # Primero intentamos directo
-                monto = float(monto_str)
+                monto = float(monto_respuesta["r"])
             except ValueError:
-                # Si falla, quitar puntos de miles y reemplazar coma por punto
-                monto_str_limpio = monto_str.replace(".", "").replace(",", ".")
-                try:
-                    monto = float(monto_str_limpio)
-                except ValueError:
-                    monto = 0.0
+                monto = 0.0
+        elif monto_respuesta and "text" in monto_respuesta:
+            try:
+                monto = float(monto_respuesta["text"])
+            except ValueError:
+                monto = 0.0
+        # Asegurar que sea positivo
+        if monto is not None and monto <= 0:
+            monto = 0.0
 
-        # 2. Tipo: indeterminado - siempre se solicitará al usuario
-        tipo = "indeterminado"
+        # 3. Solicitar destinatario vía termux_dialog
+        destinatario_respuesta = termux_api.mostrar_dialogo(
+            widget="text",
+            titulo="Destinatario BBVA",
+            mensaje="¿Quién es el persona o comercio? ",
+        )
+        destinatario = destinatario_respuesta["text"].strip() if destinatario_respuesta and "text" in destinatario_respuesta else "por definir"
+        if not destinatario:
+            destinatario = "por definir"
 
-        # 3. Destinatario: indeterminado
-        destinatario = "por definir"
+        # 3. Solicitar motivo vía termux_api con contexto
+        motivo = termux_api.solicitar_motivo_contexto(
+            es_gasto=False,
+            titulo_notificacion=titulo_notificacion,
+            app_nombre="BBVA"
+        )
 
         # 4. Generar event_id
         notification_id = datos_crudos.get("notification_id") or datos_crudos.get("key", "")
@@ -71,12 +101,11 @@ class BBVAAdapter:
                 dt = datetime.fromtimestamp(float(when))
                 fecha_hora = dt.isoformat()
             except (ValueError, TypeError):
-                # Si no hay cuando, usar fecha actual
                 fecha_hora = datetime.now().isoformat()
         else:
             fecha_hora = datetime.now().isoformat()
 
-        # 6. Constructar diccionario normalizado
+        # 5. Constructar diccionario normalizado
         normalizado = {
             "monto": monto,
             "tipo": tipo,
@@ -84,15 +113,15 @@ class BBVAAdapter:
             "event_id": event_id,
             "canal": "bbva",
             "fecha_hora": fecha_hora,
-            "mensaje_raw": mensaje,
-            "motivo": None,  # Siempre None - se solicitará al usuario
+            "mensaje_raw": datos_crudos.get("content") or datos_crudos.get("message", ""),
+            "motivo": motivo,  # Solicitado vía termux_api con contexto BBVA
             "fuente": "por definir",
             "origen_paquete": (
                 datos_crudos.get("packageName")
                 or datos_crudos.get("package")
                 or datos_crudos.get("paquete", "")
             ),
-            "titulo_visual": datos_crudos.get("title", datos_crudos.get("titulo", "")),
+            "titulo_visual": titulo_notificacion,
             "timestamp_epoch": datos_crudos.get("when", datos_crudos.get("timestamp", 0)),
         }
 
