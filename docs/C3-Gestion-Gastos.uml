@@ -1,0 +1,77 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_WITH_LEGEND()
+top to bottom direction
+
+title Nivel 3: Diagrama de Componentes - Motor de Automatización (Termux / Python)
+
+' ----------------------------
+' Actores y Sistemas Externos (Afuera)
+' ----------------------------
+Person(user, "Usuario", "Realiza pagos/ingresos y proporciona el contexto o motivo.")
+System_Ext(banks, "Bancos y Billeteras", "Yape, Plin, BBVA, Interbank, NFC, Compartamos.")
+System_Ext(looker, "Looker Studio", "Visualiza reportes y métricas.")
+
+' ----------------------------
+' Frontera del Dispositivo Móvil (Entorno Local)
+' ----------------------------
+System_Boundary(mobile_env, "Dispositivo Android (Entorno Local)") {
+    
+    Container(automate, "Sensor de Notificaciones", "Automate App", "Intercepta el push del banco y lanza el disparador.")
+    Container(dialog_api, "Gestor de Interfaz y Hardware", "Termux:API (Addon Android)", "Despliega diálogos (termux-dialog) y obtiene GPS (termux-location).")
+    ContainerDb(sqlite, "Base de Datos Local", "SQLite", "Almacena respaldo offline e historial para deduplicación.")
+
+    ' Contenedor al que hacemos ZOOM (Nivel 3)
+    Container_Boundary(termux_engine, "Motor de Automatización (Termux / Python)") {
+        Component(dispatcher, "Dispatcher & Router", "Python Script", "Recibe la señal de Automate, lee el archivo temporal e identifica el canal.")
+        Component(parsers, "Adaptadores por App", "Python Modules", "Reglas particulares de Yape, Interbank, BBVA, NFC y Compartamos (detecta campos faltantes).")
+        Component(dedup_mgr, "Gestor de Deduplicación", "Python Logic", "Valida ventanas de tiempo contra SQLite para evitar duplicados (ej. NFC + Tarjeta).")
+        Component(sqlite_dao, "DAO Persistencia Local", "SQLite Driver", "Gestiona lecturas y escrituras locales en SQLite.")
+        Component(sync_client, "Cliente de Sincronización", "Requests HTTP", "Envía registros consolidados hacia la Cloud Function.")
+    }
+}
+
+' ----------------------------
+' Frontera de la Nube (Backend)
+' ----------------------------
+System_Boundary(cloud_env, "Infraestructura Cloud") {
+    Container(api, "API de Gastos", "Google Cloud Function (Python)", "Recibe peticiones HTTP y valida esquemas.")
+    ContainerDb(sheets, "Base de Datos Cloud", "Google Sheets", "Almacena el historial definitivo.")
+}
+
+' ----------------------------
+' Anclaje visual para mantener al Usuario afuera
+' ----------------------------
+Lay_R(user, banks)
+Lay_D(user, mobile_env)
+Lay_D(banks, mobile_env)
+
+' ----------------------------
+' Relaciones y Flujo
+' ----------------------------
+Rel(user, banks, "Realiza consumos", "Físico / App / NFC")
+Rel(banks, automate, "Emite notificación", "Android Push")
+
+' Entrada al Motor Python
+Rel(automate, dispatcher, "Dispara script y deja metadatos", "Broadcast / Archivo local")
+Rel(dispatcher, parsers, "Enruta según app de origen", "Lógica interna")
+
+' Interacción con Termux:API (Contenedor externo al motor)
+Rel(parsers, dialog_api, "Invoca comandos del sistema", "Subprocess (termux-dialog / location)")
+Rel(dialog_api, user, "Muestra ventana flotante", "UI Android")
+Rel(user, dialog_api, "Ingresa motivo / destinatario", "Input de usuario")
+Rel(dialog_api, parsers, "Retorna datos capturados y GPS", "Standard Output (JSON)")
+
+' Deduplicación y Persistencia
+Rel(parsers, dedup_mgr, "Envía transacción procesada", "Objeto de datos")
+Rel(dedup_mgr, sqlite_dao, "Consulta ventana de tiempo y guarda", "Llamada interna")
+Rel(sqlite_dao, sqlite, "Lee / Escribe respaldo offline", "SQL Queries")
+
+' Sincronización Cloud
+Rel(sqlite_dao, sync_client, "Entrega registros pendientes", "Cola local")
+Rel(sync_client, api, "Sincroniza transacciones", "HTTPS / JSON")
+Rel(api, sheets, "Inserta filas", "Google Sheets API")
+Rel(sheets, looker, "Alimenta dashboards", "Conector nativo")
+
+@enduml

@@ -1,0 +1,52 @@
+@startuml
+skinparam DefaultTextAlignment center
+title Proceso de Interbank Transferencias (Solo Gastos - Notificacion Unica)
+
+start
+
+:Automate entrega notificacion desde cola FIFO;
+:Dispatcher enruta al parser de Interbank Transferencias;
+
+:Parsear notificacion de transferencia\n(validar gasto, monto y destinatario);
+if (Es gasto valido por transferencia Interbank?) then (Si)
+else (No: ingreso, otro canal o ruido)
+    stop
+endif
+
+:Resguardo anti-duplicado en SQLite\n(misma app, monto, destinatario y ventana corta);
+if (Existe registro duplicado reciente?) then (Si)
+    :Descartar notificacion duplicada;
+    stop
+else (No)
+    :Generar event_id unico;
+endif
+
+:Pedir motivo con termux-dialog\n(con timeout y validacion de texto);
+
+:Obtener GPS con termux-location\n(con timeout);
+if (GPS valido?) then (Si)
+    :Usar coordenadas actuales\n(gps_source = live);
+else (No / Error / Timeout)
+    :Consultar ultima coordenada valida en SQLite;
+    if (Existe ubicacion previa?) then (Si)
+        :Usar ultima ubicacion\n(gps_source = last_known);
+    else (No)
+        :Dejar ubicacion nula\n(gps_source = none);
+    endif
+endif
+
+:Insertar gasto en SQLite\n(status = consolidated, synced = 0);
+
+if (Hay conexion a Internet?) then (Si)
+    :Enviar payload JSON (con event_id)\na Google Cloud Function;
+    if (Respuesta 2xx?) then (Si)
+        :Actualizar synced = 1 en SQLite;
+    else (No)
+        :Mantener synced = 0 en SQLite;
+    endif
+else (No)
+    :Mantener synced = 0 en SQLite\n(Modo Offline);
+endif
+
+stop
+@enduml

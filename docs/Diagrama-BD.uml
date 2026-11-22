@@ -1,0 +1,121 @@
+@startuml
+skinparam ClassAttributeIconSize 0
+skinparam DefaultTextAlignment left
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #FBC02D
+title Modelo de Base de Datos SQLite - Contexto y Relaciones
+
+entity "transacciones\n(Movimientos consolidados: Gastos e Ingresos)" as tx {
+  * id : ENTERO <<PK>> = 104
+  --
+  * id_transaccion : TEXTO <<UNIQUE>> = "a8f12c90-4b11-4e2a-91d0-88f123abc456"
+  * fecha_hora_epoch : REAL = 1795272840.52
+  * fecha_hora_iso : TEXTO = "2026-11-21T09:54:00-05:00"
+  * fecha : TEXTO = "2026-11-21"
+  * hora : TEXTO = "09:54:00"
+  * trimestre : TEXTO = "2026-Q4"
+  --
+  * app : TEXTO = "Plin"
+  * paquete : TEXTO = "pe.com.interbank.mobilebanking"
+  * dispositivo : TEXTO = "Celular-Erick"
+  --
+  * tipo : TEXTO = "Gasto"
+  * medio : TEXTO = "Tarjeta"
+  * monto_total : REAL = 200.00
+  * moneda : TEXTO = "PEN"
+  * destinatario : TEXTO = "Carlos Perez"
+  --
+  * motivo : TEXTO = "Prestamo urgente"
+  * categoria : TEXTO = "Prestamos"
+  * notas : TEXTO = "Devuelve en dos partes"
+  * es_prestamo : ENTERO = 1
+  * monto_pagado : REAL = 80.00
+  * saldo_pendiente : REAL = 120.00
+  * estado_prestamo : TEXTO = "parcial"
+  * looker : ENTERO = 1
+  --
+  * latitud : REAL = -11.994210
+  * longitud : REAL = -77.062840
+  * mapa : TEXTO = "https://maps.google.com/?q=-11.994210,-77.062840"
+  * fuente_gps : TEXTO = "live"
+  * mensaje_raw : TEXTO = "[Plin] Plineaste S/ 200.00 a Carlos Perez"
+  --
+  * estado : TEXTO = "consolidado"
+  * sincronizado : ENTERO = 0
+  * intentos_sync : ENTERO = 0
+  * ultimo_error_sync : TEXTO = ""
+}
+
+entity "notificaciones_crudas\n(Auditoria de alertas de la cola FIFO)" as raw {
+  * id : ENTERO <<PK>> = 312
+  --
+  * recibido_en : REAL = 1795272838.10
+  * paquete : TEXTO = "pe.com.interbank.mobilebanking"
+  * app : TEXTO = "Interbank"
+  * dispositivo : TEXTO = "Celular-Erick"
+  * titulo : TEXTO = "Confirmacion Plin"
+  * cuerpo : TEXTO = "Plineaste S/ 200.00 a Carlos Perez"
+  * id_transaccion_vinculada : TEXTO <<FK>> = "a8f12c90-4b11-4e2a-91d0-88f123abc456"
+  * resultado_proceso : TEXTO = "consolidada"
+}
+
+entity "abonos_prestamo\n(Pagos/devoluciones que afectan a la deuda)" as abono {
+  * id : ENTERO <<PK>> = 14
+  --
+  * id_transaccion_prestamo : TEXTO <<FK>> = "a8f12c90-4b11-4e2a-91d0-88f123abc456"
+  * id_transaccion_ingreso : TEXTO <<FK>> = "f9910b22-1c44-4a10-b2e1-11a987def012"
+  * fecha_abono : TEXTO = "2026-11-25"
+  * monto_abono : REAL = 80.00
+  * saldo_restante : REAL = 120.00
+  * nota : TEXTO = "Primer abono recibido por Plin"
+}
+
+tx ||--o{ raw : "1 a N: agrupa alertas crudas\n(prenotificacion, Plin, tarjeta, NFC)"
+tx ||--o{ abono : "1 a N: si es_prestamo = 1,\nregistra cada abono y actualiza saldo"
+
+note right of tx
+  **Por que es necesaria:**
+  Actua como la fuente unica de verdad ya limpia
+  y deduplicada, lista para operar offline en el
+  celular y alimentar Google Sheets / Looker Studio.
+  Absorbe tanto alertas automatizadas como registros
+  manuales (efectivo, egresos sin alerta, etc.).
+
+  **Relacion con otras tablas:**
+  - Recibe consolidaciones desde "notificaciones_crudas"
+    cuando llegan multiples alertas de un mismo evento.
+  - Cuando un movimiento es prestamo/deuda, sirve como
+    registro base para que "abonos_prestamo" actualice
+    pagos parciales y saldos sin alterar el flujo de
+    ingresos/gastos del tablero.
+end note
+
+note right of raw
+  **Por que es necesaria:**
+  Separa la ingesta cruda de la cola FIFO respecto
+  al dato limpio. Permite depurar cambios de formato
+  en apps bancarias o cruces entre pre-notificaciones,
+  Plin, tarjeta y NFC sin ensuciar ni perder filas
+  en la tabla principal.
+
+  **Relacion con otras tablas:**
+  - Se asocia en relacion 1 a N hacia "transacciones":
+    varias notificaciones crudas pueden converger en
+    una sola transaccion consolidada, o quedar
+    registradas como ruido/duplicado sin crear gasto.
+end note
+
+note right of abono
+  **Por que es necesaria:**
+  Resuelve el seguimiento de deudas o prestamos
+  que se recuperan en cuotas o partes sin mezclar
+  el historial de devoluciones dentro de un solo
+  campo plano, manteniendo claro el saldo vivo.
+
+  **Relacion con otras tablas:**
+  - Conecta el gasto/deuda original en "transacciones"
+    con cada ingreso recibido cuando te pagan una parte,
+    permitiendo recalcular el saldo pendiente de forma
+    trazable sin perder el registro del ingreso en caja.
+end note
+@enduml

@@ -1,0 +1,48 @@
+@startuml
+skinparam DefaultTextAlignment center
+title Proceso Unificado: Gastos con Tarjeta Fisica y NFC (Interbank / Cola FIFO)
+
+start
+
+:Automate entrega notificacion desde cola FIFO\n(NFC o Tarjeta Fisica / Interbank);
+:Dispatcher enruta al proceso unificado de Tarjeta / NFC;
+
+:Parsear notificacion de gasto\n(origen: nfc o tarjeta/interbank, monto, comercio/detalle);
+if (Es notificacion de gasto valida?) then (Si)
+else (No)
+    stop
+endif
+
+:Buscar en SQLite gasto reciente en ventana\n(mismo monto o evento previo NFC/Tarjeta);
+if (Ya existe gasto reciente compatible?) then (Si)
+    :Consolidar notificacion en registro existente:\n- Anexar muestra cruda (NFC o Tarjeta)\n- Completar monto o comercio si faltaba\n- No repetir termux-dialog;
+    :Marcar status = consolidated y synced = 0;
+else (No: es la primera alerta de este gasto)
+    :Pedir motivo con termux-dialog\n(una sola vez, con timeout y validacion);
+    :Obtener GPS con termux-location\n(con timeout);
+    if (GPS valido?) then (Si)
+        :Usar coordenadas actuales\n(gps_source = live);
+    else (No / Error / Timeout)
+        :Consultar ultima coordenada valida en SQLite;
+        if (Existe ubicacion previa?) then (Si)
+            :Usar ultima ubicacion\n(gps_source = last_known);
+        else (No)
+            :Dejar ubicacion nula\n(gps_source = none);
+        endif
+    endif
+    :Generar event_id e insertar gasto en SQLite\n(status = consolidated, synced = 0);
+endif
+
+if (Hay conexion a Internet?) then (Si)
+    :Enviar payload JSON (con event_id)\na Google Cloud Function;
+    if (Respuesta 2xx?) then (Si)
+        :Actualizar synced = 1 en SQLite;
+    else (No)
+        :Mantener synced = 0 en SQLite;
+    endif
+else (No)
+    :Mantener synced = 0 en SQLite\n(Modo Offline);
+endif
+
+stop
+@enduml

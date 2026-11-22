@@ -1,0 +1,56 @@
+@startuml
+skinparam DefaultTextAlignment center
+title Proceso de BBVA: Ingresos y Gastos (Alerta Generica - Captura Completa)
+
+start
+
+:Automate entrega notificacion BBVA desde cola FIFO;
+:Dispatcher enruta al parser de BBVA;
+
+if (Es notificacion de BBVA valida?) then (Si)
+else (No)
+    stop
+endif
+
+:Solicitar tipo de movimiento con termux-dialog\n(ingreso o gasto, con timeout y validacion);
+if (Tipo valido seleccionado?) then (Si)
+else (No / Cancelado)
+    stop
+endif
+
+:Solicitar monto con termux-dialog\n(con timeout y validacion numerica > 0);
+if (Monto valido ingresado?) then (Si)
+else (No / Cancelado)
+    stop
+endif
+
+:Solicitar persona o comercio con termux-dialog\n(con timeout y sanitizacion);
+:Solicitar motivo con termux-dialog\n(con timeout y sanitizacion);
+
+:Obtener GPS con termux-location\n(con timeout);
+if (GPS valido?) then (Si)
+    :Usar coordenadas actuales\n(gps_source = live);
+else (No / Error / Timeout)
+    :Consultar ultima coordenada valida en SQLite;
+    if (Existe ubicacion previa?) then (Si)
+        :Usar ultima ubicacion\n(gps_source = last_known);
+    else (No)
+        :Dejar ubicacion nula\n(gps_source = none);
+    endif
+endif
+
+:Generar event_id unico e insertar movimiento en SQLite\n(app = bbva, status = consolidated, synced = 0);
+
+if (Hay conexion a Internet?) then (Si)
+    :Enviar payload JSON (con event_id)\na Google Cloud Function;
+    if (Respuesta 2xx?) then (Si)
+        :Actualizar synced = 1 en SQLite;
+    else (No)
+        :Mantener synced = 0 en SQLite;
+    endif
+else (No)
+    :Mantener synced = 0 en SQLite\n(Modo Offline);
+endif
+
+stop
+@enduml

@@ -1,0 +1,38 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+LAYOUT_WITH_LEGEND()
+
+title Nivel 1: Contexto Detallado - Sistema de Gestión de Gastos Personales
+
+' ----------------------------
+' Actores
+' ----------------------------
+Person(user, "Usuario", "Realiza pagos/ingresos, clasifica motivos y analiza su presupuesto.")
+
+' ----------------------------
+' Sistemas Externos de Origen y Destino
+' ----------------------------
+System_Ext(banks, "Bancos y Billeteras Digitales", "Yape, Plin, BBVA, Interbank, NFC, Compartamos. Generan notificaciones de movimiento.")
+System_Ext(sheets, "Google Sheets", "Almacena de forma estructurada el historial completo de ingresos y gastos.")
+System_Ext(looker, "Looker Studio", "Visualiza KPIs, gráficos y tendencias financieras del usuario.")
+
+' ----------------------------
+' Frontera del Sistema Propio (Dividido funcionalmente)
+' ----------------------------
+System_Boundary(system_boundary, "Plataforma de Gestión de Gastos") {
+    System(mobile_layer, "Entorno Móvil (Android)", "Captura notificaciones de los bancos en tiempo real, solicita el motivo al usuario y gestiona respaldo local.")
+    System(cloud_layer, "Entorno Cloud (Backend)", "Recibe la información procesada desde el celular para centralizarla en la nube.")
+}
+
+' ----------------------------
+' Relaciones Funcionales
+' ----------------------------
+Rel(user, banks, "Realiza consumos diarios", "Físico / App / NFC")
+Rel(banks, user, "Notifica la transacción", "Push / SMS")
+Rel(user, mobile_layer, "Interactúa para ingresar motivos y consultar localmente", "Pantalla / Popups")
+Rel(mobile_layer, cloud_layer, "Sincroniza transacciones consolidadas", "Internet / API")
+Rel(cloud_layer, sheets, "Escribe y actualiza registros financieros", "Conexión Segura")
+Rel(sheets, looker, "Alimenta tableros y reportes", "Conector de Datos")
+
+@enduml

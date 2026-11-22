@@ -1,0 +1,51 @@
+@startuml
+skinparam DefaultTextAlignment center
+title Flujo del Adaptador: Yape (Ingresos) - Robustez, Fallback GPS y Seguridad
+
+start
+
+:Automate entrega notificación desde cola FIFO;\nDispatcher enruta a **YapeParser**;
+
+if (¿Es notificación válida de Yape?) then (Sí)
+    :Extraer y validar tipos:\n- Monto (numérico > 0)\n- Persona (remitente);
+else (No)
+    :Ignorar / No procesar;
+    stop
+endif
+
+:<strong>Resguardo Extra (Anti-duplicado):</strong>\nConsultar SQLite por:\n- app = "yape"\n- amount y person iguales\n- dentro de ventana de tiempo;
+
+if (¿Ya existe registro idéntico en la ventana?) then (Sí)
+    :Descartar duplicado;
+    stop
+else (No)
+    :Generar `event_id` único y continuar;
+endif
+
+:Invocar `termux-dialog` (con timeout)\npara solicitar el **motivo**;
+:Sanitizar y validar texto ingresado\n(manejar vacío o cancelación de forma segura);
+
+:Intentar obtener ubicación GPS (`termux-location` con timeout);
+if (¿GPS válido obtenido?) then (Sí)
+    :Usar coordenadas actuales (`lat`, `lng`, `gps_source = "live"`);
+else (No / Error / Timeout)
+    :<strong>Fallback GPS:</strong> Consultar última ubicación válida\nen SQLite (`gps_source = "last_known"`);
+endif
+
+:Construir payload JSON validado:\n- `event_id`\n- `app`: "yape"\n- `type`: "income"\n- `amount`, `person`, `reason`\n- `timestamp`, `location` (`lat`, `lng`, `gps_source`);
+
+:Guardar en SQLite local (`synced = 0`)\ncon respaldo íntegro antes de salir a red;
+
+if (¿Hay conexión a Internet?) then (Sí)
+    :Enviar HTTPS autenticado a Google Cloud Function\n(con reintentos y backoff ante fallos transitorios);
+    if (¿Respuesta 2xx confirmada?) then (Sí)
+        :Actualizar en SQLite `synced = 1`;
+    else (No)
+        :Mantener `synced = 0` en SQLite para reintento;
+    endif
+else (No)
+    :Dejar `synced = 0` en SQLite (Modo Offline);
+endif
+
+stop
+@enduml

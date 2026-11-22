@@ -1,0 +1,53 @@
+@startuml
+skinparam DefaultTextAlignment center
+title Proceso de Compartamos Financiera (Solo Ingresos - Cola FIFO)
+
+start
+
+:Automate entrega notificacion Compartamos desde cola FIFO;
+:Dispatcher enruta al parser de Compartamos Financiera;
+
+:Parsear notificacion de ingreso\n(validar ingreso y extraer monto);
+if (Es ingreso valido de Compartamos?) then (Si)
+else (No: gasto, otro canal o ruido)
+    stop
+endif
+
+:Resguardo anti-duplicado en SQLite\n(app = compartamos, ingreso, mismo monto y ventana corta);
+if (Existe ingreso duplicado reciente?) then (Si)
+    :Descartar notificacion duplicada;
+    stop
+else (No)
+    :Generar event_id unico;
+endif
+
+:Solicitar remitente o persona con termux-dialog\n(con timeout y sanitizacion);
+:Solicitar motivo con termux-dialog\n(con timeout y sanitizacion);
+
+:Obtener GPS con termux-location\n(con timeout);
+if (GPS valido?) then (Si)
+    :Usar coordenadas actuales\n(gps_source = live);
+else (No / Error / Timeout)
+    :Consultar ultima coordenada valida en SQLite;
+    if (Existe ubicacion previa?) then (Si)
+        :Usar ultima ubicacion\n(gps_source = last_known);
+    else (No)
+        :Dejar ubicacion nula\n(gps_source = none);
+    endif
+endif
+
+:Insertar ingreso en SQLite\n(app = compartamos, tx_type = income,\nstatus = consolidated, synced = 0);
+
+if (Hay conexion a Internet?) then (Si)
+    :Enviar payload JSON (con event_id)\na Google Cloud Function;
+    if (Respuesta 2xx?) then (Si)
+        :Actualizar synced = 1 en SQLite;
+    else (No)
+        :Mantener synced = 0 en SQLite;
+    endif
+else (No)
+    :Mantener synced = 0 en SQLite\n(Modo Offline);
+endif
+
+stop
+@enduml
