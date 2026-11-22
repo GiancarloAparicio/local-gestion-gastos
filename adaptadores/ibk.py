@@ -273,9 +273,17 @@ class IBKAdapter:
         elif "te ha plineado" in mensaje_lower:
             es_ingreso = True
         else:
-            # Formato legacy o genérico
-            es_gasto = "plineaste" in mensaje_lower or "transferencia" in mensaje_lower
-            es_ingreso = "abonó" in mensaje_lower or "transferencia recibida" in mensaje_lower
+            # Formato legacy o genérico (incluye TRAN, transferencia, etc.)
+            # NOTE: "tran" en minúscula coincide con "TRAN" de los mensajes IBK
+            #      (TRAN se pone en minúscula al hacer .lower())
+            es_gasto = (
+                "plineaste" in mensaje_lower
+                or "tran" in mensaje_lower
+                or "transferencia" in mensaje_lower
+            )
+            es_ingreso = (
+                "abonó" in mensaje_lower or "transferencia recibida" in mensaje_lower
+            )
 
         # 4. Extraer el monto según el formato
         if formato_tipo == "tarjeta":
