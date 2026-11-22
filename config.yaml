@@ -4,61 +4,38 @@
 
 # --- Configuración de Base de Datos ---
 bd:
-  tipo: "sqlite"  # "postgresql" o "mysql" en futuro
+  tipo: "sqlite"
   ruta_sqlite: "./local_gastos.db"
 
 # --- Modo de Operación ---
-modo_operacion: "automate_broker"  # "automate_broker" o "listener_directo"
+modo_operacion: "automate_broker"
 
 # --- Ventana de Consolidación ---
 ventana_consolidacion:
-  minutos: 5  # Ventana de tiempo (en minutos) para consolidar múltiples alertas
-  # Criterios: mismo tipo + mismo monto ±10% dentro de la ventana
+  minutos: 5
 
 # --- Procesamiento ---
 procesamiento:
   tiempo_espera_gps_segundos: 10
   tiempo_espera_dialogo_segundos: 30
   maximo_intentos_sincronizacion: 3
-  backoff_espera_segundos: [5, 10, 30]  # Reintentos exponenciales
+  backoff_espera_segundos: [5, 10, 30]
 
 # --- Adaptadores Activos ---
-# Los adaptadores que se cargarán al iniciar el sistema
 adaptadores_activos:
   - "yape"
   - "ibk"
-  - "bbva"
-  - # "nfc" - por habilitar
-  - # "compartamos" - por habilitar
-  - # "manual" - se usa vía CLI
 
 # --- Mapeo de Paquetes a Adaptadores ---
-# Configuración del paquete (property "package" del JSON de Automate)
-# para decidir qué adaptador usar. Las claves son los patrones de paquete
-# y los valores son los nombres de los adaptadores (sin el sufijo "Adapter").
 mapeo_adaptadores:
   pe.com.interbank.mobilebanking: "ibk"
   com.bcp.innovacxion.yapeapp: "yape"
-  # Más mapeos pueden añadirse aquí
 
 # --- Directorio de Archivos Automate ---
-# Directorio donde la app Automate deja los archivos JSON con los datos de notificación.
-# Este es el path por defecto que el sistema leerá al iniciar en modo automate_broker.
-# En Android typically: /sdcard/Automate/notify
 directorio_archivos_automate: "/sdcard/storage/shared/Documents/noti.json"
-  # Puedo personalizar esto según el entorno:
-  # - En Termux/Linux: /home/usuario/Automate/notify
-  # - En Android real: /sdcard/Automate/notify
-
-# --- Credenciales (cargar de variables de entorno .env) ---
-credenciales:
-  google_cloud_func_url: "${GOOGLE_CLOUD_FUNC_URL}"
-  google_sheets_id: "${GOOGLE_SHEETS_ID}"
-  looker_studio_url: "${LOOKER_STUDIO_URL}"
 
 # --- Configuración de Registro ---
 logging:
-  nivel: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  nivel: "INFO"
   archivo: "./logs/app.log"
   rotacion: "10 MB"
-  _retencion_dias: 30
