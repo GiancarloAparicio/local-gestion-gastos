@@ -1,0 +1,24 @@
+# C3 - BBVA Adapter
+
+## Descripción
+Adapter para notificaciones del banco BBVA (aunque el sistema está diseñado principalmente para IBK/Interbank).
+
+### Características
+- Soporte limitado a formatos específicos de BBVA
+- Integración con el sistema de validación de duplicados
+- Almacenamiento en base de datos SQLite
+
+### Formatos soportados
+- Formatos específicos de notificaciones BBVA
+- Posible compatibilidad con formatos TRAN, PLIN dependiendo del estructura del mensaje
+
+### Comandos relacionados
+```bash
+python3 main.py --accion listar
+python3 main.py --accion insertar
+```
+
+### Integración con el sistema
+- El adapter BBVA hereda de la misma base que IBK
+- Validación de duplicados consistente con las reglas del sistema
+- Logging consistente en `~/.local_gestion_gastos/app.log`
