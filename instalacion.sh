@@ -1,61 +1,121 @@
 #!/bin/bash
-echo "=== local-gestion-gastos Installation Script ==="
+# ============================================================
+# Script de Instalación Completa: local-gestion-gastos
+# ============================================================
 
-# Verify Python
-if python3 --version > /dev/null 2>&1; then
-    echo "✅ Python3 available: $(python3 --version)"
-else
-    echo "❌ Python3 not found"
-    exit 1
+echo "============================================================"
+echo "Instalando local-gestion-gastos con entorno virtual"
+echo "============================================================"
+echo ""
+
+# 1. Verificar Python3
+echo "[1/7] Verificando Python3..."
+if ! command -v python3 &> /dev/null; then
+    echo "❌ Python3 no encontrado. Instalando..."
+    if [ -f "/data/data/com.termux/files/usr/bin/pkg" ]; then
+        pkg install -y python python-pip
+    else
+        echo "❌ No se pudo instalar Python3 automáticamente."
+        exit 1
+    fi
 fi
+echo "✅ Python3 $(python3 --version)"
+echo ""
 
-# Create project directories
+# 2. Crear entorno virtual
+echo "[2/7] Creando entorno virtual de Python..."
 PROJECT_DIR="$HOME/local-gestion-gastos"
-mkdir -p "$PROJECT_DIR/adaptadores"
-mkdir -p "$PROJECT_DIR/modulios"
-mkdir -p "$PROJECT_DIR/docs"
-echo "✅ Directories created: $PROJECT_DIR"
+VENV_DIR="$PROJECT_DIR/.venv"
 
-# Copy project files
-if [ ! -f "$PROJECT_DIR/adaptadores/ibk.py" ]; then
-    cp -r /home/giancarlo/local-gestion-gastos/* "$PROJECT_DIR"/ 2>/dev/null && echo "✅ Files copied" || echo "⚠️ Some files could not be copied"
-else
-    echo "✅ Files already exist"
+if [ -d "$VENV_DIR" ]; then
+    echo "⚠️ Entorno virtual ya existe en $VENV_DIR"
+    read -p "¿Desea recrearlo? (y/n): " recrear
+    if [ "$recrear" = "y" ]; then
+        rm -rf "$VENV_DIR"
+    fi
 fi
 
-# Verify imports
+if [ ! -d "$VENV_DIR" ]; then
+    python3 -m venv "$VENV_DIR"
+    echo "✅ Entorno virtual creado en $VENV_DIR"
+fi
+
+# Activar entorno virtual
+echo ""
+echo "[3/7] Activando entorno virtual..."
+source "$VENV_DIR/bin/activate"
+echo "✅ Entorno virtual activado"
+
+# 4. Instalar dependencias desde requirements.txt
+echo "[4/7] Instalando dependencias..."
+if [ -f "$PROJECT_DIR/requirements.txt" ]; then
+    pip install -r "$PROJECT_DIR/requirements.txt"
+    echo "✅ Dependencias instaladas desde $PROJECT_DIR/requirements.txt"
+else
+    echo "⚠️ Archivo requirements.txt no encontrado"
+fi
+echo ""
+
+# 5. Copiar estructura del proyecto si no existe
+echo "[5/7] Copiando estructura del proyecto..."
+if [ ! -f "$PROJECT_DIR/adaptadores/ibk.py" ]; then
+    cp -r /home/giancarlo/local-gestion-gastos/* "$PROJECT_DIR"/ 2>/dev/null && echo "✅ Archivos copiados" || echo "⚠️ Algunos archivos no pudieron copiarse"
+else
+    echo "✅ Estructura del proyecto ya existe en $PROJECT_DIR"
+fi
+echo ""
+
+# 6. Configurar variables de entorno
+echo "[6/7] Configurando variables de entorno..."
+cat >> "$HOME/.bashrc" << 'EOF_EXTERNO'
+
+# ============================================================
+# Configuración de local-gestion-gastos
+# ============================================================
+
+export LOCAL_GASTOS_DIR="$HOME/local-gestion-gastos"
+export PATH="$PROJECT_DIR/.venv/bin:$PATH"
+
+if [ -f "$LOCAL_GASTOS_DIR/modulios/termux_api.py" ]; then
+    echo "✅ local-gestion-gastos configurado directorio: $LOCAL_GASTOS_DIR"
+    echo "   Entorno virtual: $LOCAL_GASTOS_DIR/.venv"
+fi
+EOF_EXTERNO
+source "$HOME/.bashrc" 2>/dev/null || true
+echo "✅ Variables de entorno configuradas"
+echo ""
+
+# 7. Verificar importaciones críticas
+echo "[7/7] Verificando importaciones críticas..."
 python3 -c "
 import sys
 sys.path.insert(0, '$PROJECT_DIR/modulios')
 sys.path.insert(0, '$PROJECT_DIR/adaptadores')
-import re, uuid, time, json, sqlite3
-print('✅ Basic Python modules OK')
+
+import re, uuid, time, json, sqlite3, logging
+print('✅ Módulos básicos del sistema OK')
 
 from adaptadores.ibk import IBKAdapter
 adapter = IBKAdapter()
-print('✅ IBKAdapter loaded')
+print('✅ IBKAdapter inicializado correctamente')
 
-# Test format classification
-tests = [
+test_msgs = [
     'TRAN S/ 98.00\nA: Brithney Castillon',
-    'Plineaste S/ 98.00 to Brithney Castillon',
+    'Plineaste S/ 98.00 a Brithney Castillon',
     'Realizaste un consumo con tu tarjeta.',
     'S/ 63.67 con Infinite ••9820'
 ]
-for t in tests:
-    fmt = adapter._clasificar_formato(t)
-    print(f'   Format: {tests.index(t)+1} -> {fmt}')
+for msg in test_msgs:
+    fmt = adapter._clasificar_formato(msg)
+    print(f'   Formato {test_msgs.index(msg)+1}: {fmt}')
 "
-echo "✅ All modules tested successfully"
-
-# Setup bashrc
-echo 'export LOCAL_GASTOS_DIR="$HOME/local-gestion-gastos"' >> "$HOME/.bashrc" 2>/dev/null
-echo "✅ Environment configured"
-
 echo ""
-echo "========================================"
-echo "Installation Complete!"
-echo "========================================"
-echo "Project location: $PROJECT_DIR"
-echo "To use: source \$HOME/.bashrc && python3"
-echo "========================================"
+
+echo "============================================================"
+echo "¡Instalación y configuración completadas!"
+echo "============================================================"
+echo "Ubicación del proyecto: $PROJECT_DIR"
+echo "Entorno virtual: $PROJECT_DIR/.venv"
+echo "Para activar: source $PROJECT_DIR/.venv/bin/activate"
+echo "Para usar: source \$HOME/.bashrc && python3"
+echo "============================================================"
