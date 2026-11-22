@@ -21,10 +21,10 @@ def main():
     parser = argparse.ArgumentParser(description="Sistema local-gestion-gastos")
     parser.add_argument(
         "--accion",
-        choices=["listar", "sync", "insert", "fifo", "listener"],
+        choices=["listar", "sync", "insert", "automate_broker", "listener"],
         default="listar",
         help="Acción a realizar: listar (ver transacciones), sync (sincronizar con nube), "
-             "insert (insertar manual), fifo (procesar archivos Automate), listener (capturar notificaciones directas)",
+             "insert (insertar manual), automate_broker (procesar archivos JSON de Automate), listener (capturar notificaciones directas)",
     )
     parser.add_argument(
         "--motivo",
@@ -151,8 +151,8 @@ def main():
         print(f"   Destinatario: {args.destinatario}")
         print(f"   Sincronizado: NO (0) - Ejecute 'python3 main.py --sync' para enviar a la nube")
 
-    elif args.accion == "fifo":
-        """Procesar archivos del directorio con el modo Automate Broker."""
+    elif args.accion == "automate_broker":
+        """Procesar archivos JSON de Automate dejados en el directorio."""
         directorio = args.directorio or os.getenv(
             "DIRECTORIO_NOTIFICACIONES", "/sdcard/Automate/notify"
         )
@@ -163,6 +163,7 @@ def main():
     elif args.accion == "listener":
         """Capturar notificaciones directas modo listener_directo."""
         print(f"\n🔄 Modo Listener Directo: capturando notificaciones")
+        # Para la acción listener, el modo ya viene defaultado a listener_directo
         directorio = args.directorio or "/tmp/termux_notifications"
         os.makedirs(directorio, exist_ok=True)
         fifo = FIFOCola(directorio_monitor=directorio, modo_operacion=args.modo)

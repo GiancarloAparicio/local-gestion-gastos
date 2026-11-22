@@ -1,315 +1,318 @@
 # Interfaz de Línea de Comandos (CLI) - local-gestion-gastos
 
-Documentación completa de todas las funcionalidades del sistema a través de la línea de comandos, incluyendo cómo gatillar el sistema con archivos JSON dejados por Automate y cómo operar completamente con Termux API.
+Documentación detallada de todas las funcionalidades del sistema a través de la línea de comandos, con diferenciación clara entre **acción** y **modo**.
 
 ---
 
-## 1. Comandios Disponibles (usando flags)
+## 1. Conceptos Fundamentales: Acción vs. Modo
 
-El sistema ofrece los siguientes comandos principales a través de `main.py` usando **flags** (bandera/switch):
+Antes de ver los comandos, es importante entender la diferencia entre estos dos conceptos:
+
+### Acción ( `--accion` )
+**Qué quieres hacer** con el sistema. Define la operación principal.
+
+| Acción | Qué hace |
+|--------|----------|
+| `listar` | Muestra transacciones almacenadas en SQLite |
+| `sync` | Envía transaccencias pendientes a la nube (Google Cloud Function) |
+| `insert` | Agrega una nueva transacción manualmente |
+| `automate_broker` | Procesa archivos JSON dejados por la aplicación **Automate** en un directorio |
+| `listener` | Captura notificaciones directas usando las API de Termux |
+
+**Ejemplo:** `python3 main.py --accion listar` → "Quiero ver mis transacciones guardadas"
+
+### Modo ( `--modo` )
+**Cómo debería operar** el sistema durante esa acción. Solo es necesario especificarlo en ciertos casos.
+
+| Modo | Describe el comportamiento |
+|------|---------------------------|
+| `automate_broker` | El sistema procesa archivos JSON que Automate dejó en un directorio. Este es el modo por defecto para la acción `automate_broker`. |
+| `listener_directo` | El sistema captura notificaciones directamente usando las API de Termux. Este es el modo por defecto para la acción `listener`. |
+
+**Regla general:**
+- Para la acción `automate_broker`, el modo por defecto es `automate_broker` (a menos que quieras sobreescribirlo)
+- Para la acción `listener`, el modo por defecto es `listener_directo` (por eso **no es necesario** pasar `--modo listener_directo` cada vez)
+- Puedes sobrescribir el modo default usando el flag `--modo` si es necesario
+
+**Ejemplo:** `python3 main.py --accion automate_broker` → "Quiero procesar archivos de Automate usando el modo broker por defecto"
+
+---
+
+## 2. Comandos Principales (Flags)
+
+El sistema ofrece los siguientes comandos principales a través de `main.py`:
 
 ### `python3 main.py --accion listar`
-- **Descripción:** Lista las últimas transacciones registradas en la base de datos local.
-- **Flag:** `--accion listar` (o simplemente `--accion` con valor `listar`)
-- **Uso típico:** Revisar el historial de movimientos ya procesados.
-- **Ejemplo:**
-  ```bash
-  python3 main.py --accion listar
-  ```
-- **Salida:** Muestra las últimas 10 transacciones con fecha, tipo, monto y destinatario.
 
-### `python3 main.py --accion sync`
-- **Descripción:** Sincroniza las transacciones pendientes con la nube (Google Cloud Function).
-- **Flag:** `--accion sync`
-- **Uso típico:** Después de procesar notificaciones, enviar los datos a Google Sheets/Looker Studio.
-- **Ejemplo:**
-  ```bash
-  python3 main.py --accion sync
-  ```
-- **Comportamiento:** Lista hasta 100 transacciones con `sincronizado=0` y marca las primeras 3 como sincronizadas (modo demo).
+**Descripción:** Muestra las últimas transacciones registradas en la base de datos local.
 
-### `python3 main.py --accion insert`
-- **Descripción:** Inserta una transacción manual desde la CLI.
-- **Flags requeridos:**
-  - `--motivo` - Razón del movimiento (obligatorio)
-  - `--tipo` - Tipo de movimiento (`ingreso` o `gasto`) (obligatorio)
-  - `--monto` - Monto del movimiento (obligatorio, debe ser > 0)
-  - `--destinatario` - Persona o comercio (obligatorio)
-- **Ejemplo:**
-  ```bash
-  python3 main.py --accion insert --motivo "Compra en mercado" --tipo gasto --monto 25.00 --destinatario "Supermercado"
-  ```
-- **Salida:** Confirma el registro con el event_id generado y muestra el estado de sincronización.
+**Flag:** `--accion listar` (es el default, pero puede especificarse explícitamente)
 
-### `python3 main.py --accion fifo`
-- **Descripción:** Procesa archivos JSON dejados por Automate usando el modo **Automate Broker**.
-- **Flags opcionales:**
-  - `--directorio` - Directorio donde Automate deja los archivos (default: `/sdcard/Automate/notify` o variable `DIRECTORIO_NOTIFICACIONES`)
-  - `--modo` - Modo operación: `automate_broker` (default) o `listener_directo`
-- **Uso típico:** Cuando Automate ha interceptado notificaciones y entregado archivos JSON al sistema.
-- **Ejemplo:**
-  ```bash
-  # Modo default (automate_broker)
-  python3 main.py --accion fifo
-
-  # Con directorio personalizado
-  python3 main.py --accion fifo --directorio /sdcard/Automate/mi_notificaciones
-
-  # Con modo listener especificado
-  python3 main.py --accion fifo --modo listener_directo
-  ```
-- **Comportamiento:** Lee los archivos del directorio, ordena por fecha (FIFO), para cada archivo extrae la propiedad `package`, consulta `config.yaml` para decidir el adaptador (IBKAdapter, YapeAdapter, etc.), normaliza los datos, solicita motivo si es necesario (vía termux-dialog), obtiene GPS (vía termux-location) y guarda en SQLite.
-
-### `python3 main.py --accion listener`
-- **Descripción:** Captura notificaciones directas usando **Termux API** sin necesidad de que Automate entregue archivos.
-- **Flags opcionales:**
-  - `--directorio` - Directorio para almacenar datos temporales
-- **Uso típico:** Cuando se quiere capturar notificaciones directamente desde Termux en Android usando `termux-notification-list`.
-- **Ejemplo:**
-  ```bash
-  # Capturar notificaciones directas
-  python3 main.py --accion listener
-
-  # Con directorio personalizado
-  python3 main.py --accion listener --directorio /tmp/termux_notificaciones
-  ```
-- **Comportamiento:** Usa `termux-notification-list` para leer notificaciones entrantes, filtra por paquetes de bancos monitoreados, para cada notificación invoca el adaptador correspondiente, solicita motivo vía `termux-dialog` si está disponible, obtiene GPS vía `termux-location` y guarda en SQLite local.
-
----
-
-## 2. Gatillado con Archivo JSON de Automate
-
-Cuando la aplicación **Automate** (en Android) intercepta una notificación bancaria, puede entregar un archivo JSON al entorno Termux. El sistema está preparado para procesar estos archivos directamente usando flags.
-
-### Estructura del JSON que deja Automate
-
-El archivo JSON típicamente contiene propiedades como:
-
-```json
-{
-  "package": "pe.com.interbank.mobilebanking",
-  "content": "Plineaste S/ 20.00 a Nombre User",
-  "title": "Interbank",
-  "when": 1732857600.0
-}
-```
-
-### Cómo procesar el archivo JSON usando flags
-
-1. **Comando principal:**
-   ```bash
-   python3 main.py --accion fifo
-   ```
-
-2. **Con directorio personalizado (usando flag `--directorio`):**
-   ```bash
-   python3 main.py --accion fifo --directorio /sdcard/Automate/mi_notificaciones
-   ```
-
-3. **El sistema hace lo siguiente automáticamente:**
-   - Lee los archivos del directorio especificado
-   - Ordena por fecha (FIFO - First In, First Out)
-   - Para cada archivo, extrae la propiedad `package`
-   - Consulta `config.yaml` `mapeo_adaptadores` para decidir el adaptador:
-     - `pe.com.interbank.mobilebanking` → `IBKAdapter`
-     - `com.bcp.innovacxion.yapeapp` → `YapeAdapter`
-   - Normaliza los datos (extrae monto, tipo, destinatario usando las regex de cada adaptador)
-   - Solicita motivo al usuario vía `termux-dialog` si es necesario
-   - Obtiene ubicación GPS vía `termux-location` (con respaldo offline)
-   - Guarda todo en `local_gastos.db` (SQLite)
-   - Marca como listo para sincronización
-
-### Flujo completo con flags:
-
-```
-Automate (Android)
-    ↓ deja archivo JSON en /sdcard/Automate/notify/
-    ↓
-python3 main.py --accion fifo [--directorio /ruta/personalizada]
-    ↓
-FIFOCola lee el JSON
-    ↓
-Extrae propiedad "package"
-    ↓
-config.yaml mapeo_adaptadores decide IBKAdapter o YapeAdapter
-    ↓
-Adaptador.normalizar_notificacion(datos) -> diccionario normalizado
-    ↓
-¿Solicita motivo?
-    ↓
-  Sí → termux_dialog pregnancy "¿Cuál fue el motivo?"
-    ↓
-No → continúa
-    ↓
-¿Obtener GPS?
-    ↓
-  Sí → termux_location obtener_coordenadas
-    ↓
-No → usar último conocido o none
-    ↓
-Guardar en SQLite local_gastos.db
-    ↓
-Listo para: python3 main.py --accion sync
-```
-
----
-
-## 3. Operación Completa con Termux API
-
-El sistema puede operar enteramente desde Termux en Android, usando las APIs de Termux para diálogos y ubicación. Todo mediante **flags**.
-
-### 3.1 Modo listener_directo (captura directa de notificaciones)
-
-Este modo captura notificaciones directamente usando Termux API, sin necesidad de que Automate entregue archivos. Usa flag `--accion listener`.
-
+**Ejemplos:**
 ```bash
-python3 main.py --accion listener
-```
+# Modo básico (accion es el default)
+python3 main.py
 
-**Qué hace:**
-- Usa `termux-notification-list` para leer notificaciones entrantes
-- Filtra por paquetes de bancos monitoreados (`PAQUETES_BANCOS`)
-- Para cada notificación, invoca el adaptador correspondiente
-- Solicita motivo vía `termux-dialog` si está disponible
-- Obtiene GPS vía `termux-location` (con respaldo offline)
-- Guarda en SQLite local
-
-**Ejemplo práctico:**
-```bash
-# Capturar y procesar notificaciones directas
-python3 main.py --accion listener
-```
-
-### 3.2 Modo automate_broker (procesa archivos de Automate)
-
-Este es el modo por defecto, ideal cuando Automate entrega archivos JSON. Usa flag `--accion fifo`.
-
-```bash
-python3 main.py --accion fifo
-```
-
-**O con opciones adicionales:**
-```bash
-# Con directorio personalizado
-python3 main.py --accion fifo --directorio /sdcard/Automate/mi_notificaciones
-
-# Modo listener explícito (aunque fifo ya usa automate_broker por default)
-python3 main.py --accion fifo --modo listener_directo
-```
-
-### 3.3 Solicitar motivo mediante termux-dialog (usando flags)
-
-Cuando el sistema necesita el motivo de un movimiento (para consolidar o registros nuevos), invoca el diálogo automáticamente. También se puede invocar directamente:
-
-```bash
-# El sistema lo hace automáticamente durante el flujo fifo/listener
-# Pero también se puede invocar directamente desde la línea de comandos:
-python3 -c "
-from modulios.termux_api import termux_api
-resultado = termux_api.mostrar_dialogo(
-    widget='text',
-    titulo='Motivo del movimiento',
-    mensaje='¿Cuál fue el motivo de este movimiento? '
-)
-if resultado and 'text' in resultado:
-    print('Motivo ingresado:', resultado['text'])
-"
-```
-
-Dentro del flujo con flags, el sistema preguntará automáticamente si es necesario.
-
-### 3.4 Obtener ubicación GPS (usando flags)
-
-Dentro del flujo `--accion fifo` o `--accion listener`, el sistema obtiene GPS automáticamente:
-
-```bash
-# El sistema usa termux-location internamente
-python3 main.py --accion fifo
-
-# O ver la ubicación como paso independiente:
-python3 -c "
-from modulios.termux_api import termux_api
-ubicacion = termux_api.obtener_ubicacion()
-print('Latitud:', ubicacion.get('latitud'))
-print('Longitud:', ubicacion.get('longitud'))
-print('Fuente GPS:', ubicacion.get('fuente_gps'))
-"
-```
-
-### 3.5 Flujo completo Termux (offline-first) usando flags
-
-```bash
-# Paso 1: Procesar archivos dejados por Automate (usando flag fifo)
-python3 main.py --accion fifo
-
-# El sistema procesará los archivos JSON:
-# - Leerá cada archivo del directorio /sdcard/Automate/notify
-# - Extraerá la propiedad 'package' para decidir el adaptador (IBKAdapter/YapeAdapter)
-# - Normalizará los datos (monto, tipo, destinatario)
-# - Solicitará motivo vía termux-dialog si es necesario
-# - Obtendrá GPS vía termux-location (con respaldo offline)
-# - Guardará todo en local_gastos.db (SQLite)
-
-# Paso 2: Revisar los registros guardados (usando flag listar)
+# Con flag explícito
 python3 main.py --accion listar
 
-# Paso 3: Sincronizar con la nube (usando flag sync)
+# Resultado muestra:
+# 📊 Últimas 10 transacciones:
+#   - 2026-11-22 | gasto | S/ 25.00 | Supermercado
+```
+
+---
+
+### `python3 main.py --accion sync`
+
+**Descripción:** Sincroniza las transacciones pendientes con la nube (Google Cloud Function → Google Sheets → Looker Studio).
+
+**Flag:** `--accion sync`
+
+**Ejemplos:**
+```bash
+# Sincronizar transacciones pendientes
+python3 main.py --accion sync
+
+# Resultado:
+# 🔄 Sincronizando transacciones pendientes...
+# 📋 3 transacciones pendientes de sincronizar
+# ✅ 3 transacciones marcadas como sincronizadas (demo)
+```
+
+---
+
+### `python3 main.py --accion insert`
+
+**Descripción:** Inserta una transacción manual desde la CLI. Requiere todos los datos del movimiento.
+
+**Flags obligatorios:**
+
+| Flag | Descripción | Ejemplo |
+|------|-------------|---------|
+| `--motivo` | Razón o descripción del movimiento | `--motivo "Compra en mercado"` |
+| `--tipo` | Tipo de movimiento (`ingreso` o `gasto`) | `--tipo gasto` |
+| `--monto` | Monto en Soles (debe ser > 0) | `--monto 25.50` |
+| `--destinatario` | Persona o comercio beneficiado/afectado | `--destinatario "Supermercado"` |
+
+**Ejemplos:**
+```bash
+# Insertar un gasto manual
+python3 main.py --accion insert \
+  --motivo "Pago de servicio público" \
+  --tipo gasto \
+  --monto 15.50 \
+  --destinatario "Empresa de Servicios"
+
+# Resultado:
+# ✅ Transacción registrada manualmente!
+#   event_id: 4d6a7b8c-9e0f-1234-5678-9abcdef01234
+#   Motivo: Pago de servicio público
+#   Monto: S/ 15.50
+#   Tipo: gasto
+#   Destinatario: Empresa de Servicios
+#   Sincronizado: NO (0) - Ejecute 'python3 main.py --sync' para enviar a la nube
+
+# Insertar un ingreso manual
+python3 main.py --accion insert \
+  --motivo "Depósito de nómina" \
+  --tipo ingreso \
+  --monto 1200.00 \
+  --destinatario "Employer Corp"
+```
+
+**Validaciones:**
+- Si falta `--motivo`: ❌ Error: Se requiere --motivo
+- Si `--tipo` no es `ingreso` o `gasto`: ❌ Error: Se requiere --tipo válido
+- Si `--monto` ≤ 0: ❌ Error: El monto debe ser > 0
+- Si falta `--destinatario`: ❌ Error: Se requiere --destinatario
+
+---
+
+### `python3 main.py --accion automate_broker`
+
+**Descripción:** Procesa archivos JSON dejados por la aplicación **Automate** en un directorio, usando el modo **Automate Broker**. Este es el flujo principal para procesar notificaciones bancarias automáticamente.
+
+**Diferencia clave con la versión anterior:**
+- Antes se usaba `--accion fifo`, ahora se usa `--accion automate_broker` (más descriptivo)
+
+**Flags opcionales:**
+
+| Flag | Descripción | Default | Sobrescribe |
+|------|-------------|---------|-------------|
+| `--directorio` | Directorio donde Automate deja los archivos JSON | De `config.yaml` | Sí, si se especifica |
+| `--modo` | Modo de operación | `automate_broker` (por defecto) | No usualmente necesario |
+
+**Comportamiento detallado:**
+
+1. **Lector de directorio:** Lee todos los archivos del directorio especificado (o de `config.yaml`)
+2. **Ordenamiento FIFO:** Ordena por fecha de creación (first-in, first-out)
+3. **Extracción de `package`:** Para cada archivo, lee la propiedad `package` del JSON
+4. **Consulta de adaptador:** Busca en `config.yaml` `mapeo_adaptadores` para decidir el adaptador:
+   - `pe.com.interbank.mobilebanking` → `IBKAdapter`
+   - `com.bcp.innovacxion.yapeapp` → `YapeAdapter`
+5. **Normalización:** El adaptador correspondiente extrae monto, tipo, destinatario usando sus regex
+6. **Solicitud de motivo:** Si es necesario, invoca `termux-dialog` para obtener el motivo
+7. **Obtención de GPS:** Usa `termux-location` con respaldo offline
+8. **Guardado en SQLite:** Guarda la transacción en `local_gastos.db`
+
+**Ejemplos:**
+
+```bash
+# Modo default - usa directorio de config.yaml
+python3 main.py --accion automate_broker
+
+# Output esperado en consola:
+# 🔄 Modo Automate Broker: procesando archivos de /sdcard/Automate/notify
+# 📁 Directorio: /sdcard/Automate/notify
+# 📦 Paquetes: 5
+# Se encontraron 3 archivos nuevos
+# Adaptador: IBKAdapter o YapeAdapter
+# Monto: S/ 20.00, Tipo: gasto, Destinatario: Juan Pérez
+# ⏳ Solicitando motivo vía termux-dialog...
+# ✅ Transacción guardada en SQLite: event_id_123
+
+# Con directorio personalizado (sobreescribe config.yaml)
+python3 main.py --accion automate_broker --directorio /sdcard/Automate/mi_notificaciones
+
+# Output:
+# 🔄 Modo Automate Broker: procesando archivos de /sdcard/Automate/mi_notificaciones
+# 📁 Directorio: /sdcard/Automate/mi_notificaciones
+```
+
+### `python3 main.py --accion listener`
+
+**Descripción:** Captura notificaciones directas usando **Termux API** sin necesidad de que Automate entregue archivos. Este modo usa `termux-notification-list` para leer notificaciones entrantes.
+
+**Diferencia clave:**
+- **`--accion listener`** = Quiero capturar notificaciones directas
+- **¿Para `--modo`?** No es necesario especificarlo - el sistema defaulta automáticamente a `listener_directo`
+
+**Flags opcionales:**
+
+| Flag | Descripción | Default |
+|------|-------------|---------|
+| `--directorio` | Directorio para almacenar datos temporales | `/tmp/termux_notifications` |
+
+**Comportamiento detallado:**
+
+1. **Lectura de notifications:** Usa `termux-notification-list -p <paquete>` para leer notificaciones
+2. **Filtrado por paquetes:** Solo procesa notificaciones de bancos monitoreados (`PAQUETES_BANCOS`)
+3. **Para cada notificación:**
+   - Extrae los datos crudos del mensaje
+   - Invoca el adaptador correspondiente (basado en el paquete)
+   - Normaliza los datos (monto, tipo, destinatario usando regex)
+   - Solicita motivo vía `termux-dialog` si está disponible
+   - Obtiene GPS vía `termux-location` (con respaldo: última conocida o none)
+4. **Guardado en SQLite:** Almacena la transacción
+
+**Ejemplos:**
+
+```bash
+# Capturar notificaciones directas (modo default)
+python3 main.py --accion listener
+
+# Output:
+# 🔄 Modo Listener Directo: capturando notificaciones
+# 🚀 Iniciando FIFO-Cola en modo: listener_directo
+# 📁 Directorio: /tmp/termux_notifications
+# 📦 Paquetes monitorizados: 5
+# Verificando notificaciones entrantes...
+# Encontradas notificaciones de: com.bcp.innovacxion.yapeapp
+# Procesando notificación Yape...
+# Monto: S/ 15.00, Tipo: ingreso, Destinatario: María González
+# ⏳ Solicitando motivo vía termux-dialog...
+# ✅ Transacción guardada en SQLite
+
+# Con directorio personalizado
+python3 main.py --accion listener --directorio /data/data/com.termux/files/home/notify
+
+# Output:
+# 🔄 Modo Listener Directo: capturando notificaciones
+# 📁 Directorio: /data/data/com.termux/files/home/notify
+```
+
+---
+
+## 3. Diferencia entre Acción y Modo (Resumida)
+
+| Concepto | Valor | Descripción |
+|----------|-------|-------------|
+| `--accion` | `listar`, `sync`, `insert`, `automate_broker`, `listener` | **Qué hacer** - operación principal |
+| `--modo` | `automate_broker`, `listener_directo` | **Cómo hacerlo** - estilo de operación |
+
+### Cuándo usar cada combinación:
+
+| Escenario | `--accion` | `--modo` | `--directorio` |
+|-----------|------------|----------|----------------|
+| Ver transacciones | `listar` | (ninguno) | (ninguno) |
+| Sincronizar con nube | `sync` | (ninguno) | (ninguno) |
+| Insertar movimiento manual | `insert` | (ninguno, requiere `--motivo --tipo --monto --destinatario`) | (ninguno) |
+| Procesar JSON de Automate | `automate_broker` | `automate_broker` (default) | Opcional (`--directorio`) |
+| Capturar notificaciones Termux | `listener` | `listener_directo` (default) | Opcional (`--directorio`) |
+
+**Ejemplos de combinaciones:**
+
+```bash
+# Usado común: procesar Automate con defaults
+python3 main.py --accion automate_broker
+
+# Personalizado: procesar JSON de otro directorio
+python3 main.py --accion automate_broker --directorio /home/usuario/Automate/notifications
+
+# Solo captura Termux (sin Automate)
+python3 main.py --accion listener
+
+# Insertar movimiento manual
+python3 main.py --accion insert \
+  --motivo "Compra" \
+  --tipo gasto \
+  --monto 10 \
+  --destinatario "Tienda"
+
+# Flujo completo Automate → Procesar → Sincronizar
+python3 main.py --accion automate_broker
+python3 main.py --accion listar
 python3 main.py --accion sync
 ```
 
 ---
 
-## 4. Configuración del Flujo
+## 4. Detalle del Directorio de Automate (config.yaml)
 
-### `config.yaml` - Personalización
+A diferencia de sistemas anteriores, **el directorio donde Automate deja los archivos JSON ahora viene configurado en `config.yaml`**, no como parámetro obligatorio en cada ejecución.
 
-El archivo `config.yaml` concentra toda la configuración. **Las flags del CLI usan estos valores por defecto, pero pueden sobreescribirse:**
+### Configuración en `config.yaml`:
 
 ```yaml
-# --- Mapeo de Paquetes a Adaptadores ---
-# Configuración del paquete (property "package" del JSON de Automate)
-# para decidir qué adaptador usar. Las claves son los patrones de paquete
-# y los valores son los nombres de los adaptadores (sin el sufijo "Adapter").
-mapeo_adaptadores:
-  pe.com.interbank.mobilebanking: "ibk"
-  com.bcp.innovacxion.yapeapp: "yape"
-  # Más mapeos pueden añadirse aquí
-
-# --- Modo de Operación ---
-modo_operacion: "automate_broker"  # "automate_broker" o "listener_directo"
-
-# --- Ventana de Consolidación ---
-ventana_consolidacion:
-  minutos: 5  # Ventana de tiempo (en minutos) para consolidar múltiples alertas
-
-# --- Directorio donde Automate deja los archivos ---
-# Se lee desde variable de entorno DIRECTORIO_NOTIFICACIONES
-# o usa el default: /sdcard/Automate/notify
+# --- Directorio de Archivos Automate ---
+directorio_archivos_automate: "/sdcard/Automate/notify"
+  # Puedo personalizar según entorno:
+  # - En Termux/Linux: /home/usuario/Automate/notify
+  # - En Android real: /sdcard/Automate/notify
 ```
 
-### Variables de Entorno (usadas por flags)
+### Flujo de trabajo:
 
-- `DIRECTORIO_NOTIFICACIONES`: Ruta donde Automate deja los archivos JSON (default: `/sdcard/Automate/notify`)
-  - Se sobreescribe con flag `--directorio`
-- `GOOGLE_CLOUD_FUNC_URL`: URL de la función Cloud para sincronización
-- `GOOGLE_SHEETS_ID`: ID de la hoja de cálculo Google Sheets
-- `LOOKER_STUDIO_URL`: URL de Looker Studio
+1. **Configuración inicial:** El usuario establece `directorio_archivos_automate` en `config.yaml`
+2. **Ejecución normal:** `python3 main.py --accion automate_broker` lee automáticamente de `config.yaml`
+3. **Sobrescritura opcional:** `python3 main.py --accion automate_broker --directorio /ruta/personalizada` si se necesita cambiar temporalmente
+
+### Sin flag `--directorio`:
+El sistema usará el valor de `config.yaml`, lo que hace el flujo más limpio y centralizado.
 
 ---
 
-## 5. Ejemplos Prácticos (usando flags)
+## 5. Ejemplos Prácticos
 
-### Ejemplo 1: Procesar archivos dejados por Automate
+### Ejemplo 1: Procesar JSON de Automate (recomendado)
 
 ```bash
-# Modo default - procesar en /sdcard/Automate/notify
-python3 main.py --accion fifo
+# Modo default - procesa usando directorio de config.yaml
+python3 main.py --accion automate_broker
 
 # Con directorio personalizado
-python3 main.py --accion fifo --directorio /sdcard/Automate/mi_notificaciones
-
-# Especificar modo listener (aunque fifo usa automate_broker por default)
-python3 main.py --accion fifo --modo listener_directo
+python3 main.py --accion automate_broker --directorio /sdcard/Automate/mi_notificaciones
 ```
 
 ### Ejemplo 2: Capturar notificaciones directas (modo listener)
@@ -337,49 +340,89 @@ python3 main.py --accion insert \
 python3 main.py --accion sync
 ```
 
-### Ejemplo 5: Combinar flags --modo y --directorio
+### Ejemplo 5: Flujo completo (Automate → Procesar → Sincronizar)
 
 ```bash
-# Usar listener_directo con directorio personalizado
-python3 main.py --accion listener --directorio /data/data/com.termux/files/home/notify
+# Paso 1: Procesar archivos dejados por Automate
+python3 main.py --accion automate_broker
 
-# Usar fifo con modo explícito
-python3 main.py --accion fifo --modo automate_broker
+# Salida:
+# 🔄 Modo Automate Broker: procesando archivos de /sdcard/Automate/notify
+# 📁 Directorio: /sdcard/Automate/notify
+# 📦 Paquetes: 5
+# Se encontraron 3 archivos nuevos
+# Adaptador IBKAdapter para: pe.com.interbank.mobilebanking
+# Adaptador YapeAdapter para: com.bcp.innovacxion.yapeapp
+# 3 transacciones guardadas en SQLite
+# Procesamiento broker Automate finalizado
+
+# Paso 2: Revisar qué se guardó
+python3 main.py --accion listar
+
+# Salida:
+# 📊 Últimas 10 transacciones:
+#   - 2026-11-22 | gasto | S/ 20.00 | Juan Pérez
+#   - 2026-11-22 | ingreso | S/ 15.50 | María Gómez
+#   - 2026-11-22 | gasto | S/ 50.00 | Supermercado
+
+# Paso 3: Sincronizar con la nube
+python3 main.py --accion sync
+
+# Salida:
+# 🔄 Sincronizando transacciones pendientes...
+# 📋 3 transacciones pendientes de sincronizar
+# ✅ 3 transacciones marcadas como sincronizadas (demo)
+# ✅ Sincronización completada
+```
+
+### Ejemplo 4: Combinaciones de flags
+
+```bash
+# Usado común: procesar Automate con defaults
+python3 main.py --accion automate_broker
+
+# Personalizado: procesar JSON de otro directorio
+python3 main.py --accion automate_broker --directorio /sdcard/Automate/notify
+
+# Usado común: capturar notificaciones Termux
+python3 main.py --accion listener
+
+# Con modo explícito (aunque ya es default)
+python3 main.py --accion listener --modo listener_directo
+
+# Insertar movimiento manual
+python3 main.py --accion insert \
+  --motivo "Compra supermercado" \
+  --tipo gasto \
+  --monto 25.50 \
+  --destinatario "Supermercado"
 ```
 
 ---
 
-## 6. Estructura de Datos Resultante
-
-Después de procesar notificaciones (ya sea usando flags `--accion fifo` o `--accion listener`), los datos se guardan en SQLite (`local_gastos.db`) en la tabla `transacciones` con campos como:
-
-- `id_transaccion` - UUID único
-- `fecha` / `hora` - Fecha y hora del movimiento
-- `tipo` - `ingreso` o `gasto`
-- `monto_total` - Monto en Soles (PEN)
-- `destinatario` - Persona o comercio
-- `motivo` - Razón del movimiento (solicitado vía termux-dialog cuando es necesario)
-- `latitud` / `longitud` - Coordenadas GPS (con respaldo offline: `live`, `last_known` o `none`)
-- `fuente_gps` - Origen de la ubicación (`live`, `last_known` o `none`)
-- `sincronizado` - `0` (pendiente) o `1` (enviado a la nube)
-- `origen_paquete` - El `package` original del JSON de Automate (ej. `pe.com.interbank.mobilebanking`)
-- `canal` - `interbank`, `yape`, `nfc`, `manual`, etc.
-- `fecha_hora_epoch` - Marca de tiempo epoch
-
----
-
-## 7. Resumen de Flags Disponibles
+## 6. Resumen de Flags Disponibles
 
 | Flag | Acción | Descripción |
 |------|--------|-------------|
 | `--accion listar` | listar | Ver transacciones en SQLite |
 | `--accion sync` | sync | Sincronizar con nube |
 | `--accion insert` | insert | Insertar manual con `--motivo --tipo --monto --destinatario` |
-| `--accion fifo` | fifo | Procesar archivos Automate de directorio |
-| `--directorio RUTA` | fifo/listener | Directorio personalizado (sobreescribe default) |
-| `--modo MODE` | fifo/listener | `automate_broker` (default) u `listener_directo` |
+| `--accion automate_broker` | automate_broker | Procesar archivos JSON de Automate de directorio |
+| `--accion listener` | listener | Capturar notificaciones directas via Termux API |
+| `--directorio RUTA` | automate_broker/listener | Directorio personalizado (sobreescribe `config.yaml`) |
+| `--modo MODE` | automate_broker/listener | `automate_broker` (default para automate_broker) o `listener_directo` (default para listener) |
 
 **Ejemplo completo con todos los flags:**
 ```bash
-python3 main.py --accion fifo --directorio /sdcard/Automate/notify --modo automate_broker
+python3 main.py --accion automate_broker --directorio /sdcard/Automate/notify --modo automate_broker
+```
+
+**O simplemente, usando defaults:**
+```bash
+python3 main.py --accion automate_broker
+# (usa config.yaml automáticamente)
+
+# O para listener:
+python3 main.py --accion listener
+# (defaulta automáticamente a listener_directo)
 ```
