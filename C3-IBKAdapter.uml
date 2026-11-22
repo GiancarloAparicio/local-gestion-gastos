@@ -1,0 +1,30 @@
+@startuml
+skinparam DefaultTextAlignment center
+title Proceso de Interbank Transferencias y Formatos Diversos
+
+state "INICIO" as start
+state "Validar paquete Interbank/Plin" as validar
+state "CLASIFICAR FORMATO" as clasificar
+state "Procesar según formato" as procesar
+state "SOLICITAR MOTIVO" as motivo
+state "Validar Duplicados" as duplicados
+state "INSERTAR/Actualizar SQLite" as db
+state "FIN" as end
+
+start -> validar: ¿Es paquete Interbank?
+validar -> clasificar: Sí
+validar -> end: No
+
+clasificar --> clasificar_formato: Formato = clasificar_formato(mensaje)
+clasificar_formato --> procesar: formato = TRAN, PLIN, TARJETA o NFC
+
+procesar --> motivo: Siempre solicitar motivo via termux-dialog
+motivo --> duplicados: ¿Es duplicado?
+
+duplicados --> db: NO es duplicado (mismo tipo nunca es duplicado)
+duplicados --> db: Sí es duplicado (tipos diferentes consolidan)
+
+db --> end: Insertar/Actualizar registro
+db --> end: Consolidar con registro existente
+
+@enduml

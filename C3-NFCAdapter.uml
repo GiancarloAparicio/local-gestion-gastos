@@ -1,0 +1,29 @@
+@startuml
+skinparam DefaultTextAlignment center
+title Proceso NFC: Pagos Google Pay y Consolidación con IBK
+
+state "INICIO" as start
+state "Validar paquete NFC" as validar
+state "CLASIFICAR FORMATO NFC" as clasificar_nfc
+state "Procesar NFC" as procesar_nfc
+state "SOLICITAR MOTIVO NFC" as motivo_nfc
+state "Validar Duplicados NFC" as duplicados_nfc
+state "Validar Consolidación IBK" as consolidar_ibk
+state "INSERTAR/Actualizar SQLite" as db
+state "FIN" as end
+
+start -> validar: ¿Es paquete walletnfcrel?
+validar -> clasificar_nfc: Sí
+validar -> end: No
+
+clasificar_nfc --> procesar_nfc: Formato NFC detectado
+procesar_nfc --> motivo_nfc: Solicitar motivo via termux-dialog
+motivo_nfc --> duplicados_nfc: ¿Es duplicado?
+
+duplicados_nfc --> consolidar_ibk: ¿Existe registro IBK previo?
+consolidar_ibk --> db: Consolidar con IBK (NFC + TARJETA/TRAN/PLIN)
+consolidar_ibk --> db: Insertar nuevo registro NFC
+db --> end: Actualizar registro consolidado
+db --> end: Insertar nuevo registro NFC
+
+@enduml

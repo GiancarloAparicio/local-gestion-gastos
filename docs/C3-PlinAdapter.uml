@@ -1,64 +1,50 @@
 @startuml
 skinparam DefaultTextAlignment center
-title Proceso de Plin: Ingresos y Gastos (Cuenta / Tarjeta) en Cola FIFO
+title Proceso Plin: Ingresos y Gastos con Consolidación Multi-FORMATO
 
-start
+state "INICIO" as start
+state "Recibir notificación Plin" as recv
+state "CLASIFICAR FORMATO" as clasificar
+state "Procesar según formato" as procesar
+state "SOLICITAR MOTIVO" as motivo
+state "Validar Duplicados" as duplicados
+state "Validar Consolidación" as consolidar
+state "INSERTAR/Actualizar SQLite" as db
+state "FIN" as end
 
-:Automate entrega notificacion desde cola FIFO;
-:Dispatcher enruta al parser de Plin;
+state "FORMATOS SOPORTADOS" as formatos
+state "TRAN: Mismo tipo NUNCA duplicado" as tran_rule
+state "PLIN: Mismo tipo NUNCA duplicado" as plin_rule
+state "TARJETA: Mismo tipo NUNCA duplicado" as tarjeta_rule
+state "NFC: Mismo tipo NUNCA duplicado" as nfc_rule
+state "Consolidar tipos DIFERENTES" as consolidar_regla
 
-:Parsear notificacion Plin\n(tipo: ingreso o gasto, monto, persona, canal);
-if (Es notificacion valida de Plin?) then (Si)
-else (No)
-    stop
-endif
+start -> recv: Notificación Plin recibida
+recv --> clasificar: ¿Es PLIN, TRAN, TARJETA o NFC?
+clasificar --> procesar: Formato detectado
 
-if (Es ingreso por Plin?) then (Si)
-    :Pedir motivo con termux-dialog\n(con timeout y validacion de texto);
-    :Obtener GPS con termux-location\n(con timeout);
-    if (GPS valido?) then (Si)
-        :Usar coordenadas actuales\n(gps_source = live);
-    else (No / Error / Timeout)
-        :Consultar ultima coordenada valida en SQLite;
-        if (Existe ubicacion previa?) then (Si)
-            :Usar ultima ubicacion\n(gps_source = last_known);
-        else (No)
-            :Dejar ubicacion nula\n(gps_source = none);
-        endif
-    endif
-    :Generar event_id e insertar ingreso\nen SQLite (status = consolidated, synced = 0);
-else (No: es gasto por Plin)
-    :Buscar en SQLite gasto Plin reciente\nen ventana de tiempo\n(mismo monto, persona o borrador previo:\nprenotificacion, Plin o tarjeta);
-    if (Ya existe registro de este gasto?) then (Si)
-        :Consolidar notificacion adicional en SQLite\n(2da o 3ra alerta: prenotificacion / Plin / tarjeta):\n- Anexar muestra cruda\n- Completar monto, persona o metodo (cuenta / tarjeta)\n- No repetir termux-dialog;
-        :Marcar status = consolidated y synced = 0;
-    else (No: es la 1ra notificacion del gasto)
-        :Pedir motivo con termux-dialog\n(una sola vez, con timeout);
-        :Obtener GPS con termux-location\n(con timeout);
-        if (GPS valido?) then (Si)
-            :Usar coordenadas actuales\n(gps_source = live);
-        else (No / Error / Timeout)
-            :Consultar ultima coordenada valida en SQLite;
-            if (Existe ubicacion previa?) then (Si)
-                :Usar ultima ubicacion\n(gps_source = last_known);
-            else (No)
-                :Dejar ubicacion nula\n(gps_source = none);
-            endif
-        endif
-        :Generar event_id e insertar gasto Plin\nen SQLite (status = consolidated, synced = 0);
-    endif
-endif
+procesar --> motivo: Siempre solicitar motivo via termux-dialog
+motivo --> duplicados: ¿Es duplicado?
 
-if (Hay conexion a Internet?) then (Si)
-    :Enviar payload JSON (con event_id)\na Google Cloud Function;
-    if (Respuesta 2xx?) then (Si)
-        :Actualizar synced = 1 en SQLite;
-    else (No)
-        :Mantener synced = 0 en SQLite;
-    endif
-else (No)
-    :Mantener synced = 0 en SQLite\n(Modo Offline);
-endif
+duplicados --> tran_rule: ¿Es TRAN + TRAN?
+tran_rule --> duplicados: No (NUNCA duplicado)
+tran_rule --> consolidar_regla: Consolidar si tipo diferente
 
-stop
+duplicados --> plin_rule: ¿Es PLIN + PLIN?
+plin_rule --> duplicados: No (NUNCA duplicado)
+plin_rule --> consolidar_regla: Consolidar si tipo diferente
+
+duplicados --> tarjeta_rule: ¿Es TARJETA + TARJETA?
+tarjeta_rule --> duplicados: No (NUNCA duplicado)
+tarjeta_rule --> consolidar_regla: Consolidar si tipo diferente
+
+duplicados --> nfc_rule: ¿Es NFC + NFC?
+nfc_rule --> duplicados: No (NUNCA duplicado)
+nfc_rule --> consolidar_regla: Consolidar si tipo diferente
+
+duplicados --> consolidar_regla: Tipos DIFERENTES consolidan
+consolidar_regla --> db: Insertar/Actualizar consolidado
+consolidar_regla --> db: Sin duplicado (diferente tipo)
+db --> end: Actualizar registro
+
 @enduml

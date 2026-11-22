@@ -1,51 +1,51 @@
 @startuml
-!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+skinparam DefaultTextAlignment center
+title C2: Flujo de Trabajo - Procesamiento de Notificaciones
 
-LAYOUT_WITH_LEGEND()
+state "INICIO" as start
+state "NOTIFICACIÓN RECIBIDA" as recv
+state "VALIDAR PAQUETE" as validar
+state "CLASIFICAR FORMATO" as clasificar
+state "PROCESAR CON IC" as procesar
+state "SOLICITAR MOTIVO" as motivo
+state "VALIDAR DUPLICADOS" as duplicados
+state "CONSOLIDAR O INSERTAR" as db
+state "FIN" as end
 
-title Nivel 2: Diagrama de Contenedores - Sistema de Gestión de Gastos (Vista Unificada)
+state "FORMATOS SOPORTADOS" as formatos
+state "TRAN: Mismo tipo NUNCA duplicado" as tran_rule
+state "PLIN: Mismo tipo NUNCA duplicado" as plin_rule
+state "TARJETA: Mismo tipo NUNCA duplicado" as tarjeta_rule
+state "NFC: Mismo tipo NUNCA duplicado" as nfc_rule
+state "Consolidar tipos DIFERENTES" as consolidar_regla
 
-' ----------------------------
-' Actores y Sistemas Externos
-' ----------------------------
-Person(user, "Usuario", "Realiza pagos/ingresos y proporciona el contexto o motivo de los movimientos.")
-System_Ext(banks, "Bancos y Billeteras Digitales", "Yape, Plin, BBVA, Interbank, NFC, Compartamos. Generan las alertas.")
-System_Ext(looker, "Looker Studio", "Visualiza reportes, gráficos y métricas de gasto.")
+start -> recv: Notificación recibida desde Automate/FIFO
+recv --> validar: ¿Es paquete conocido?
+validar --> clasificar: Sí, paquete conocido
+validar -> end: No, ignorar
 
-' ----------------------------
-' Contenedores del Dispositivo Móvil (Android)
-' ----------------------------
-System_Boundary(mobile_env, "Dispositivo Android (Entorno Local)") {
-    Container(automate, "Sensor de Notificaciones", "Automate App", "Intercepta de forma ligera la notificación push del banco y lanza el disparador.")
-    Container(termux, "Motor de Automatización", "Termux / Python", "Procesa metadatos, obtiene ubicación GPS y gestiona la lógica.")
-    Container(dialog_api, "Gestor de Interfaz Local", "Termux:API (termux-dialog)", "Despliega las ventanas emergentes para solicitar el motivo al usuario.")
-    ContainerDb(sqlite, "Base de Datos Local", "SQLite", "Almacena una copia de respaldo offline de las transacciones.")
-}
+clasificar --> procesar: Formato = TRAN, PLIN, TARJETA o NFC
+procesar --> motivo: Siempre solicitar motivo via termux-dialog
+motivo --> duplicados: ¿Es duplicado?
 
-' ----------------------------
-' Contenedores de la Nube (Backend)
-' ----------------------------
-System_Boundary(cloud_env, "Infraestructura Cloud") {
-    Container(api, "API de Gastos", "Google Cloud Function (Python)", "Recibe peticiones HTTP, valida esquemas y procesa la data.")
-    ContainerDb(sheets, "Base de Datos Cloud", "Google Sheets", "Almacena de forma estructurada el historial definitivo.")
-}
+duplicados --> tran_rule: ¿Es TRAN + TRAN?
+tran_rule --> duplicados: No (NUNCA duplicado)
+tran_rule --> consolidar_regla: Consolidar si tipo diferente
 
-' ----------------------------
-' Relaciones y Flujo General
-' ----------------------------
-Rel(user, banks, "Realiza consumos", "Físico / App / NFC")
-Rel(banks, automate, "Emite notificación de movimiento", "Android Push")
+duplicados --> plin_rule: ¿Es PLIN + PLIN?
+plin_rule --> duplicados: No (NUNCA duplicado)
+plin_rule --> consolidar_regla: Consolidar si tipo diferente
 
-Rel(automate, termux, "Dispara ejecución de script", "Broadcast / Trigger")
-Rel(termux, dialog_api, "Solicita input de usuario", "Comando Termux:API")
-Rel(dialog_api, user, "Muestra diálogo flotante", "UI Android")
-Rel(user, dialog_api, "Ingresa el motivo del gasto/ingreso", "Input de texto")
-Rel(dialog_api, termux, "Retorna el motivo capturado", "Standard Output")
+duplicados --> tarjeta_rule: ¿Es TARJETA + TARJETA?
+tarjeta_rule --> duplicados: No (NUNCA duplicado)
+tarjeta_rule --> consolidar_regla: Consolidar si tipo diferente
 
-Rel(termux, sqlite, "Registra backup local", "SQL Driver")
-Rel(termux, api, "Sincroniza transacciones pendientes", "HTTPS / API REST")
+duplicados --> nfc_rule: ¿Es NFC + NFC?
+nfc_rule --> duplicados: No (NUNCA duplicado)
+nfc_rule --> consolidar_regla: Consolidar si tipo diferente
 
-Rel(api, sheets, "Inserta y actualiza filas de registros", "Google Sheets API")
-Rel(sheets, looker, "Alimenta tableros analíticos", "Conector nativo")
+duplicados --> consolidar_regla: Tipos DIFERENTES consolidan
+consolidar_regla --> db: Insertar/Actualizar consolidado
+db --> end: Actualizar/Sin duplicados
 
 @enduml

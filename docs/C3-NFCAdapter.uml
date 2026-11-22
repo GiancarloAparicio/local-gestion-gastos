@@ -1,48 +1,30 @@
 @startuml
 skinparam DefaultTextAlignment center
-title Proceso de Pago NFC (Cola FIFO y Consolidacion con Banco)
+title Proceso NFC: Google Pay / walletnfcrel
 
-start
+state "INICIO" as start
+state "Recibir notificación NFC" as recv
+state "CLASIFICAR FORMATO NFC" as clasificar_nfc
+state "Extraer datos: monto, beneficiario, tipo" as datos_nfc
+state "SOLICITAR MOTIVO NFC" as motivo_nfc
+state "Validar Duplicados NFC" as duplicados_nfc
+state "Validar Consolidación IBK" as consolidar_ibk
+state "INSERTAR/Actualizar SQLite" as db
+state "FIN" as end
 
-:Automate entrega notificacion NFC desde cola FIFO;
-:Dispatcher enruta al parser de Pago NFC;
+start -> recv: Notificación NFC recibida
+recv --> clasificar_nfc: ¿Es walletnfcrel?
+clasificar_nfc --> datos_nfc: Sí, extraer monto/beneficiario
+datos_nfc --> motivo_nfc: Solicitar motivo via termux-dialog
+motivo_nfc --> duplicados_nfc: ¿Es duplicado?
 
-:Parsear notificacion NFC\n(validar gasto y extraer monto);
-if (Es notificacion NFC valida?) then (Si)
-else (No)
-    stop
-endif
+duplicados_nfc --> nfc_rule: ¿Es NFC + NFC?
+nfc_rule --> duplicados_nfc: No (NUNCA duplicado - mismo tipo)
+nfc_rule --> consolidar_ibk: Consolidar si tipo diferente a IBK
 
-:Buscar en SQLite gasto reciente en ventana\n(ej. alerta previa de banco con mismo monto);
-if (Existe registro de gasto reciente compatible?) then (Si)
-    :Consolidar notificacion NFC en registro existente:\n- Anexar muestra cruda NFC\n- Completar monto si faltaba\n- No repetir termux-dialog;
-    :Marcar status = consolidated y synced = 0;
-else (No: entra primero NFC o no hay alerta bancaria)
-    :Pedir motivo con termux-dialog\n(una sola vez, con timeout);
-    :Obtener GPS con termux-location\n(con timeout);
-    if (GPS valido?) then (Si)
-        :Usar coordenadas actuales\n(gps_source = live);
-    else (No / Error / Timeout)
-        :Consultar ultima coordenada valida en SQLite;
-        if (Existe ubicacion previa?) then (Si)
-            :Usar ultima ubicacion\n(gps_source = last_known);
-        else (No)
-            :Dejar ubicacion nula\n(gps_source = none);
-        endif
-    endif
-    :Generar event_id e insertar gasto en SQLite\n(status = consolidated, synced = 0);
-endif
+consolidar_ibk --> db: Consolidar con IBK (NFC + TARJETA/TRAN/PLIN)
+nfc_rule --> db: Insertar nuevo registro NFC
+db --> end: Actualizar registro consolidado
+db --> end: Insertar nuevo registro NFC
 
-if (Hay conexion a Internet?) then (Si)
-    :Enviar payload JSON (con event_id)\na Google Cloud Function;
-    if (Respuesta 2xx?) then (Si)
-        :Actualizar synced = 1 en SQLite;
-    else (No)
-        :Mantener synced = 0 en SQLite;
-    endif
-else (No)
-    :Mantener synced = 0 en SQLite\n(Modo Offline);
-endif
-
-stop
 @enduml

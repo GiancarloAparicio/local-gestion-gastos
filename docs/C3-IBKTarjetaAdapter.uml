@@ -1,48 +1,50 @@
 @startuml
 skinparam DefaultTextAlignment center
-title Proceso Unificado: Gastos con Tarjeta Fisica y NFC (Interbank / Cola FIFO)
+title Proceso: Gastos con Tarjeta y Consolidación Multi-FORMATO
 
-start
+state "INICIO" as start
+state "Recibir notificación" as recv
+state "CLASIFICAR FORMATO" as clasificar
+state "Procesar según formato" as procesar
+state "SOLICITAR MOTIVO" as motivo
+state "Validar Duplicados" as duplicados
+state "Validar Consolidación" as consolidar
+state "INSERTAR/Actualizar SQLite" as db
+state "FIN" as end
 
-:Automate entrega notificacion desde cola FIFO\n(NFC o Tarjeta Fisica / Interbank);
-:Dispatcher enruta al proceso unificado de Tarjeta / NFC;
+state "FORMATOS SOPORTADOS" as formatos
+state "TRAN: Mismo tipo NUNCA duplicado" as tran_rule
+state "PLIN: Mismo tipo NUNCA duplicado" as plin_rule
+state "TARJETA: Mismo tipo NUNCA duplicado" as tarjeta_rule
+state "NFC: Mismo tipo NUNCA duplicado" as nfc_rule
+state "Consolidar tipos DIFERENTES" as consolidar_regla
 
-:Parsear notificacion de gasto\n(origen: nfc o tarjeta/interbank, monto, comercio/detalle);
-if (Es notificacion de gasto valida?) then (Si)
-else (No)
-    stop
-endif
+start -> recv: Notificación recibida
+recv --> clasificar: ¿Es TRAN, PLIN, TARJETA o NFC?
+clasificar --> procesar: Formato detectado
 
-:Buscar en SQLite gasto reciente en ventana\n(mismo monto o evento previo NFC/Tarjeta);
-if (Ya existe gasto reciente compatible?) then (Si)
-    :Consolidar notificacion en registro existente:\n- Anexar muestra cruda (NFC o Tarjeta)\n- Completar monto o comercio si faltaba\n- No repetir termux-dialog;
-    :Marcar status = consolidated y synced = 0;
-else (No: es la primera alerta de este gasto)
-    :Pedir motivo con termux-dialog\n(una sola vez, con timeout y validacion);
-    :Obtener GPS con termux-location\n(con timeout);
-    if (GPS valido?) then (Si)
-        :Usar coordenadas actuales\n(gps_source = live);
-    else (No / Error / Timeout)
-        :Consultar ultima coordenada valida en SQLite;
-        if (Existe ubicacion previa?) then (Si)
-            :Usar ultima ubicacion\n(gps_source = last_known);
-        else (No)
-            :Dejar ubicacion nula\n(gps_source = none);
-        endif
-    endif
-    :Generar event_id e insertar gasto en SQLite\n(status = consolidated, synced = 0);
-endif
+procesar --> motivo: Siempre solicitar motivo via termux-dialog
+motivo --> duplicados: ¿Es duplicado?
 
-if (Hay conexion a Internet?) then (Si)
-    :Enviar payload JSON (con event_id)\na Google Cloud Function;
-    if (Respuesta 2xx?) then (Si)
-        :Actualizar synced = 1 en SQLite;
-    else (No)
-        :Mantener synced = 0 en SQLite;
-    endif
-else (No)
-    :Mantener synced = 0 en SQLite\n(Modo Offline);
-endif
+duplicados --> tran_rule: ¿Es TRAN + TRAN?
+tran_rule --> duplicados: No (NUNCA duplicado)
+tran_rule --> consolidar_regla: Consolidar si tipo diferente
 
-stop
+duplicados --> plin_rule: ¿Es PLIN + PLIN?
+plin_rule --> duplicados: No (NUNCA duplicado)
+plin_rule --> consolidar_regla: Consolidar si tipo diferente
+
+duplicados --> tarjeta_rule: ¿Es TARJETA + TARJETA?
+tarjeta_rule --> duplicados: No (NUNCA duplicado)
+tarjeta_rule --> consolidar_regla: Consolidar si tipo diferente
+
+duplicados --> nfc_rule: ¿Es NFC + NFC?
+nfc_rule --> duplicados: No (NUNCA duplicado)
+nfc_rule --> consolidar_regla: Consolidar si tipo diferente
+
+duplicados --> consolidar_regla: Tipos DIFERENTES consolidan
+consolidar_regla --> db: Insertar/Actualizar consolidado
+consolidar_regla --> db: Sin duplicado (diferente tipo)
+db --> end: Actualizar/Sin duplicados
+
 @enduml

@@ -1,52 +1,49 @@
 @startuml
 skinparam DefaultTextAlignment center
-title Proceso de Interbank Transferencias (Solo Gastos - Notificacion Unica)
+title Proceso IBK: 3 Formatos - TRAN, PLIN, TARJETA, NFC
 
-start
+state "INICIO" as start
+state "Recibir notificación" as recv
+state "CLASIFICAR FORMATO" as clasificar
+state "Procesar según formato" as procesar
+state "SOLICITAR MOTIVO" as motivo
+state "Validar Duplicados" as duplicados
+state "INSERTAR/Actualizar SQLite" as db
+state "FIN" as end
 
-:Automate entrega notificacion desde cola FIFO;
-:Dispatcher enruta al parser de Interbank Transferencias;
+state "FORMATOS SOPORTADOS" as formatos
+state "TRAN: Mismo tipo NUNCA duplicado" as tran_rule
+state "PLIN: Mismo tipo NUNCA duplicado" as plin_rule
+state "TARJETA: Mismo tipo NUNCA duplicado" as tarjeta_rule
+state "NFC: Mismo tipo NUNCA duplicado" as nfc_rule
+state "Consolidar tipos DIFERENTES" as consolidar_regla
 
-:Parsear notificacion de transferencia\n(validar gasto, monto y destinatario);
-if (Es gasto valido por transferencia Interbank?) then (Si)
-else (No: ingreso, otro canal o ruido)
-    stop
-endif
+start -> recv: Notificación recibida
+recv --> clasificar: Clasificar formato
+clasificar --> procesar: formato = TRAN, PLIN, TARJETA o NFC
 
-:Resguardo anti-duplicado en SQLite\n(misma app, monto, destinatario y ventana corta);
-if (Existe registro duplicado reciente?) then (Si)
-    :Descartar notificacion duplicada;
-    stop
-else (No)
-    :Generar event_id unico;
-endif
+procesar --> motivo: Siempre solicitar motivo via termux-dialog
+motivo --> duplicados: ¿Es duplicado?
 
-:Pedir motivo con termux-dialog\n(con timeout y validacion de texto);
+duplicados --> tran_rule: ¿Es TRAN + TRAN?
+tran_rule --> duplicados: No (NUNCA duplicado)
+tran_rule --> consolidar_regla: Consolidar si tipo diferente
 
-:Obtener GPS con termux-location\n(con timeout);
-if (GPS valido?) then (Si)
-    :Usar coordenadas actuales\n(gps_source = live);
-else (No / Error / Timeout)
-    :Consultar ultima coordenada valida en SQLite;
-    if (Existe ubicacion previa?) then (Si)
-        :Usar ultima ubicacion\n(gps_source = last_known);
-    else (No)
-        :Dejar ubicacion nula\n(gps_source = none);
-    endif
-endif
+duplicados --> plin_rule: ¿Es PLIN + PLIN?
+plin_rule --> duplicados: No (NUNCA duplicado)
+plin_rule --> consolidar_regla: Consolidar si tipo diferente
 
-:Insertar gasto en SQLite\n(status = consolidated, synced = 0);
+duplicados --> tarjeta_rule: ¿Es TARJETA + TARJETA?
+tarjeta_rule --> duplicados: No (NUNCA duplicado)
+tarjeta_rule --> consolidar_regla: Consolidar si tipo diferente
 
-if (Hay conexion a Internet?) then (Si)
-    :Enviar payload JSON (con event_id)\na Google Cloud Function;
-    if (Respuesta 2xx?) then (Si)
-        :Actualizar synced = 1 en SQLite;
-    else (No)
-        :Mantener synced = 0 en SQLite;
-    endif
-else (No)
-    :Mantener synced = 0 en SQLite\n(Modo Offline);
-endif
+duplicados --> nfc_rule: ¿Es NFC + NFC?
+nfc_rule --> duplicados: No (NUNCA duplicado)
+nfc_rule --> consolidar_regla: Consolidar si tipo diferente
 
-stop
+duplicados --> consolidar_regla: Tipos DIFERENTES consolidan
+consolidar_regla --> db: Insertar/Actualizar consolidado
+consolidar_regla --> db: Sin duplicado (diferente tipo)
+db --> end: Actualizar/Sin duplicados
+
 @enduml
