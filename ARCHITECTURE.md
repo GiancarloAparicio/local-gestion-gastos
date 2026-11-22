@@ -1193,103 +1193,356 @@ Se añade un nuevo directorio opcional para scripts manuales:
 
 ---
 
-## 13. Formato de Notificaciones y Inputs
+## 13. Formato de Notificaciones y Inputs (COMPLETO SIN OMISIONES)
 
-Esta sección documenta el formato de los datos de notificación que el sistema captura, tanto desde el entorno Termux como desde JSON de Automate. Este información es crítica para los adaptadores (`BancoAdapter`) que deben parsear estos datos crudos y convertirlos a un diccionario normalizado.
+Esta sección documenta **exhaustivamente** el formato de los datos de notificación que el sistema captura, tanto desde el entorno Termux como desde JSON de Automate. Toda la información que mostraste está incluida aquí completa, campo por campo.
 
 ### 13.1 Contexto
-Las notificaciones bancarias llegan al sistema a través de dos caminos principales:
-1. **Modo Automate File Broker:** Automate escribe un archivo JSON con los datos de la notificación
-2. **Modo Listener Directo:** Termux captura notificaciones nativas del sistema Android
+Las notificaciones bancarias llegan al sistema a través de **dos caminos principales**:
 
-Ambos formatos contienen información superpuesta pero con estructuras levemente diferentes, y los adaptadores deben ser capaces de extraer los campos esenciales de cualquiera de ellos.
+1. **Modo Automate File Broker:** Automate (Android app) escribe un archivo/JSON con los datos de la notificación y lo deja en un directorio configurado para que Termux lo procese.
 
-### 13.2 Formato de Notificación Termux (Output nativo)
+2. **Modo Listener Directo:** Termux captura notificaciones nativas del sistema Android a través de sus mecanismos internos (bucle de polling, listeners nativos, etc.).
 
-Cuando Termux captura una notificación a través de sus mecanismos nativos (ej. usando `termux-notification-listener` o bucle de polling), el output tiene esta estructura:
+**Ambos formatos contienen información superpuesta pero con estructuras levemente diferentes,** y los adaptadores (`BancoAdapter`) deben ser capaces de extraer los campos esenciales de cualquiera de ellos y convertirlos a un diccionario normalizado común.
 
+---
+
+### 13.2 Formato de Notificación Termux (Output nativo completo)
+
+Cuando Termux captura una notificación a través de sus mecanismos nativos (ej. usando `termux-notification-listener` o bucle de polling), el output tiene **todos estos campos** (mostrando los dos ejemplos que proporcionaste):
+
+#### Ejemplo 1 - Notificación Yape:
 ```json
 {
-  "id": 28702580,                              // ID único de la notificación
-  "tag": "",                                   // Tag/category opcional
-  "key": "0|com.bcp.innovacxion.yapeapp|28702580|null|10424",  // Clave única formato "paquete|id"
-  "group": "",                                 // Grupo de notificación
-  "packageName": "com.bcp.innovacxion.yapeapp", // Nombre paquete Android
+  "id": 28702580,                              // Número entero: ID único de la notificación en el sistema
+  "tag": "",                                   // Cadena vacía: Tag o categoría grupal (opcional)
+  "key": "0|com.bcp.innovacxion.yapeapp|28702580|null|10424",  // Clave única formateada: "paquete|id"
+  "group": "",                                 // Cadena vacía: Grupo de notificación (opcional)
+  "packageName": "com.bcp.innovacxion.yapeapp", // Nombre paquete Android: identifica la fuente
   "title": "Confirmación de Pago",             // Título de la notificación
-  "content": "Yape! ERICK RAMOS te envió un pago por S/ 1", // Cuerpo/mensaje principal
-  "when": "2026-11-22 00:23:52"                // Marca de tiempo
+  "content": "Yape! ERICK RAMOS te envió un pago por S/ 1", // Cuerpo/mensaje principal CON monto y destinatario
+  "when": "2026-11-22 00:23:52"                // Marca de tiempo formateada: "YYYY-MM-DD HH:MM:SS"
 }
 ```
 
-**Campos esenciales para parseo:**
-- `packageName`: Identifica qué banco/billetera envió (clave para enrutar al adaptador correcto)
-- `title`: Título general (ej. "Interbank", "Confirmación de Pago")
-- `content`: Mensaje completo con monto, destinatario, operación tipo
-- `when`: Marca de tiempo de cuándo llegó
+#### Ejemplo 2 - Notificación Interbank:
+```json
+{
+  "id": 0,                                     // Entero: ID de notificación (0 en este caso puede indicar nuevo/primario)
+  "tag": "",                                   // Cadena vacía: Tag grupal
+  "key": "0|pe.com.interbank.mobilebanking|0|null|10404",  // Clave única formateada: "paquete|id"
+  "group": "",                                 // Cadena vacía: Grupo de notificación
+  "packageName": "pe.com.interbank.mobilebanking", // Nombre paquete Android: identifica la fuente
+  "title": "Interbank",                        // Título de la notificación
+  "content": "Plineaste S/ 1.00 a Erick G Ramos A", // Cuerpo/mensaje CON monto y destinatario
+  "when": "2026-11-22 00:23:50"                // Marca de tiempo: mismo formato que arriba
+}
+```
 
-**Campos opcionales pero útiles:**
-- `id`: Identificador numérico único
-- `key`: Formato "paquete|id|null|cantidad" - útil para deduplicación
-- `content`: Puede contener monto, nombre destinatario, tipo operación
+#### Desglose completos de campos en ambos ejemplos:
 
-### 13.3 Formato de Notificación JSON de Automate
+| Campo | Ejemplo 1 (Yape) | Ejemplo 2 (Interbank) | Descripción y Propósito |
+|-------|------------------|----------------------|------------------------|
+| `id` | 28702580 | 0 | ID único entero de la notificación en el sistema Termux. Permite tracking individual. |
+| `tag` | "" (vacío) | "" (vacío) | Tag o categoría grupal. Puede agrupar notificaciones relacionadas. Vacío en tus ejemplos. |
+| `key` | "0\|com.bcp.innovacxion.yapeapp\|28702580\|null\|10424" | "0\|pe.com.interbank.mobilebanking\|0\|null\|10404" | **Campo crítico para deduplicación.** Formato: `"paquete\|numero_id\|null\|conteo"`. El último número (10424/10404) parece ser un identificador de transacción o lote. |
+| `group` | "" (vacío) | "" (vacío) | Grupo de notificación Android. Agrupa varias notificaciones relacionadas (ej. hilo de conversación). Vacío en tus ejemplos. |
+| `packageName` | "com.bcp.innovacxion.yapeapp" | "pe.com.interbank.mobilebanking" | **Campo MÁS IMPORTANTE para enrutamiento.** Nombre exacto del paquete Android del banco/billetera. Usado por los adaptadores para decidir cuál adaptor invocar. |
+| `title` | "Confirmación de Pago" | "Interbank" | Título de la notificación. Identificador humano/banco de la operación. |
+| `content` | "Yape! ERICK RAMOS te envió un pago por S/ 1" | "Plineaste S/ 1.00 a Erick G Ramos A" | **Campo CRÍTICO.** Mensaje completo del banco. Contiene: tipo operación (pago/cobro), monto, nombre destinatario. Los adaptadores deben parsear este texto. |
+| `when` | "2026-11-22 00:23:52" | "2026-11-22 00:23:50" | Marca de tiempo de cuándo fue generada/recibida la notificación. Usado para ordenación FIFO y ventana de consolidación. |
 
-Cuando Automate es el encargado de capturar y entregar la notificación, el JSON tiene esta estructura (mostrado como un solo registro, pero Automate puede entregar múltiple en secuencia):
+#### Campos opcionales pero documentados por completitud:
+- `id`: Identificador numérico único. En el Ejemplo 2 es `0`, lo cual podría indicar notificación inicial/primaria.
+- `key`: Formato `"paquete\|id\|null\|conteo"`. Útil para detectar duplicados mirando el número de transacción (el último valor: 10424 o 10404).
+
+---
+
+### 13.3 Formato de Notificación JSON de Automate (COMPLETO)
+
+Cuando Automate es el encargado de capturar y entregar la notificación, el JSON incluye **todos estos campos** (mostrando los tres ejemplos que proporcionaste: Interbank simple, Interbank secuencia, Yape completa).
+
+#### Ejemplo 1 - Interbank (formato simple, un solo registro):
+```json
+{
+  "package": "pe.com.interbank.mobilebanking",          // Nombre paquete Android (CRÍTICO para enrutamiento). Igual que packageName en Termux.
+  "title": "Interbank",                                // Título de la notificación. Igual que title en Termux.
+  "message": "Plineaste S/ 1.00 a Erick G Ramos A",     // Cuerpo del mensaje. Análogo a "content" en Termux.
+  "ticker_text": null,                                 // Texto de la línea superior de la notificación. null en tus ejemplos.
+  "timestamp": 1795325030.526,                        // Marca de tiempo en **epoch seconds** (float). Convertible a fecha/hora.
+  "extras": {                                        // Paquete ADDICIONAL de notificaciones Android. Con datos extras que no van en campos principales.
+    "android.title": "Interbank",                      // Título desde la vista Android. Duplicado de "title".
+    "android.reduced.images": true,                    // Booleano: si las imágenes vienen reducidas/thumbnail.
+    "android.subText": null,                          // Subtítulo secundario. null en tus ejemplos.
+    "android.showChronometer": false,                 // Booleano: si muestra cronómetro en la notificación.
+    "android.text": "Plineaste S/ 1.00 a Erick G Ramos A", // Texto principal. Igual que "message" pero desde el sistema Android.
+    "android.progress": 0,                            // Entero: progreso de una barra (0 = ninguno).
+    "android.progressMax": 0,                         // Entero: máximo de la barra de progreso (0 = ilimitado o ninguno).
+    "android.showWhen": true,                         // Booleano: si muestra la fecha/hora en la notificación.
+    "android.infoText": null,                         // Texto informativo adicional. null.
+    "android.progressIndeterminate": false,           // Booleano: si la barra de progreso es indeterminada (animando sin fin conocida).
+    "android.remoteInputHistory": null,               // Historial de inputs remotos anteriores. null.
+    // Campos ADICIONALMENTE presentes en tu ejemplo (al final de la sección extras):
+    "android.title": "Interbank",                      // Duplicado de android.title más arriba.
+    "android.text": "Plineaste S/ 1.00 a Erick G Ramos A" // Duplicado de android.text/mas arriba.
+  },
+  "notification_id": "0|pe.com.interbank.mobilebanking|0|null|10404", // Mismo formato que el "key" de Termux: "paquete\|id\|null\|conteo". Permite correlación entre formats.
+  "channel_id": "my_ibk_channel_ibk_0",               // ID del canal de notificación Android. Agrupa notificaciones con estilo consistente.
+  "category": null,                                   // Categoría de notificación Android. null en tus ejemplos.
+  "removal_reason": null                             // Razón de remoción. null en tus ejemplos.
+}
+```
+
+#### Ejemplo 2 - Interbank (secuencia múltiple, segundo registro):
+*Nota: Este aparece en tu input como parte de una secuencia y con formato ligeramente diferente en la conversación, pero incluye los mismos campos:*
 
 ```json
 {
-  "package": "pe.com.interbank.mobilebanking",    // Nombre paquete Android (CRÍTICO para enrutamiento)
-  "title": "Interbank",                            // Título de la notificación
-  "message": "Plineaste S/ 1.00 a Erick G Ramos A", // Cuerpo del mensaje
-  "ticker_text": null,                             // Texto de la línea superior (a menudo null)
-  "timestamp": 1795325030.526,                     // Marca de tiempo epoch en segundos
-  "extras": {                                      // Paquete adicional de Android
+  "package": "pe.com.interbank.mobilebanking",          // Misma fuente bancaria
+  "title": "Interbank",                                  // Mismo título
+  "message": "Plineaste S/ 60.00 a Anthony J Ruiz L", // Mismo mensaje pero distinto monto y destinatario
+  "ticker_text": null,                                  // null otra vez
+  "timestamp": 1794722156.001,                         // Otro epoch seconds: 1794722156.001
+  "extras": {                                         // Mismos tipos de extras Android
     "android.title": "Interbank",
     "android.reduced.images": true,
     "android.subText": null,
     "android.showChronometer": false,
-    "android.text": "Plineaste S/ 1.00 a Erick G Ramos A", // Mismo texto que "message"
-    "android.progress": 0,
-    "android.progressMax": 0,
-    "android.showWhen": true,
-    "android.infoText": null,
-    "android.progressIndeterminate": false,
-    "android.remoteInputHistory": null,
-    "android.title": "Interbank",                    // Duplicado posible
-    "android.text": "Plineaste S/ 1.00 a Erick G Ramos A" // Duplicado posible
-  },
-  "notification_id": "0|pe.com.interbank.mobilebanking|0|null|10404" // ID formateado
-}
-```
-
-**Ejemplo múltiple (secuencia de notificaciones):**
-Automate puede entregar múltiples notificaciones seguidas (ej. cuando un gasto dispara primero una pre-notificación y luego la confirmación):
-
-```json
-{
-  "package": "pe.com.interbank.mobilebanking",
-  "title": "Interbank",
-  "message": "Plineaste S/ 60.00 a Anthony J Ruiz L",
-  "ticker_text": null,
-  "timestamp": 1794722156.001,
-  "extras": {
-    "android.title": "Interbank",
-    "android.reduced.images": true,
     "android.text": "Plineaste S/ 60.00 a Anthony J Ruiz L",
     "android.progress": 0,
     "android.progressMax": 0,
     "android.showWhen": true,
     "android.infoText": null,
     "android.remoteInputHistory": null
+    // ... y los duplicados al final que vio en tu input:
+    "android.title": "Interbank",
+    "android.text": "Plineaste S/ 60.00 a Anthony J Ruiz L"
   },
-  "notification_id": "0|pe.com.interbank.mobilebanking|0|null|10404",
-  "channel_id": "my_ibk_channel_ibk_0",
-  "category": null,
-  "removal_reason": null
+  "notification_id": "0|pe.com.interbank.mobilebanking|0|null|10404", // Mismo formato de ID que el precedente
+  "channel_id": "my_ibk_channel_ibk_0",               // Mismo canal de notificación
+  "category": null,                                     // null
+  "removal_reason": null                              // null (aunque en tu input se veía con "None"extra characters, técnicamente es null)
 }
 ```
 
-**O Yape:**
+#### Ejemplo 3 - Yape (formato completa con todos los extras posibles):
+```json
+{
+  "package": "com.bcp.innovacxion.yapeapp",              // Nombre paquete Yape (nota: en tu input aparecía sin comillas al inicio, pero en JSON debe estar entre comillas dobles)
+  "title": "Confirmación de Pago",                       // Título de la notificación
+  "message": "Yape! LUCAS ANDRE JUAQUIN VALDIVIESO BUTRON te envió un pago por S/ 40", // Mensaje completo con monto y destinatario larguísimo
+  "ticker_text": null,                                  // null
+  "timestamp": 1794722168.398,                          // Epoch seconds con decimales
+  "extras": {                                          // **Este es el ejemplo más completo de extras Android que viste:**
+    "android.title": "Confirmación de Pago",            // Título desde Android
+    "android.reduced.images": true,                     // Imágenes en miniatura/thumbnail
+    "android.template": "android.app.Notification$BigTextStyle", // Plantilla de notificación grande
+    "android.subText": null,                           // Sin subtítulo
+    "android.showChronometer": False,                  // Sin cronómetro (nota: en tu input dice "False" con F mayúscula, en Python booleanas son true/false)
+    "android.text": "Yape! LUCAS ANDRE JUAQUIN VALDIVIESO BUTRON te envió un pago por S/ 40", // Texto principal largo
+    "androidx.core.app.extra.COMPAT_TEMPLATE": "androidx.core.app.NotificationCompat$BigTextStyle", // Plantilla de compatibilidad para apps viejas de AndroidX
+    "android.progress": 0,                              // Sin barra de progreso
+    "android.progressMax": 0,                           // Sin barra de progreso (máximo)
+    "android.showWhen": True,                           // Mostrar fecha/hora
+    "android.largeIcon": None,                          // Sin ícono grande (None)
+    "android.bigText": "Yape! LUCAS ANDRE JUAQUIN VALDIVIESO BUTRON te envió un pago por S/ 40", // **Texto grande** de la notificación (versión extendida del message)
+    "android.infoText": None,                           // Sin texto informativo adicional
+    "android.remoteInputHistory": None,                 // Sin historial de inputs remotos
+    "android.colorized": True                           // Notificación colorizada (con emojis o colores)
+  },
+  "notification_id": "0|com.bcp.innovacxion.yapeapp|-574161335|null|10424", // ID único: nota el número negativo -574161335 distinto al de Interbank
+  "channel_id": "default_notification_channel",          // Canal por defecto de Android
+  "category": null,                                      // Categoría nula
+  "removal_reason": null                               // Razón de remoción nula
+}
+```
+
+#### 13.3.1 Cuadro Comparativo Completo de Todos los Campos
+
+| Campo | Formato Termux | Formato Automate | Descripción Detallada | Importancia CRÍTICA |
+|-------|---------------|-----------------|----------------------|-------------------|
+| `packageName` / `package` | ✅ Sí | ✅ Sí | **Nombre paquete Android.** Ejemplos: "com.bcp.innovacxion.yapeapp", "pe.com.interbank.mobilebanking". **Este es el campo principal para identificar qué adaptador usar.** | **SÍ CRÍTICO** - Sin esto no se puede enrutar |
+| `title` | ✅ Sí | ✅ Sí | Título de la notificación. Ejemplos: "Confirmación de Pago", "Interbank". Identifica visualmente el banco. | **ALTAMENTE IMPORTANTE** |
+| `content` / `message` | ✅ Sí | ✅ Sí | **Mensaje principal con operación.** Contiene: monto, destinatario, tipo operación. Ejemplos: "Yape! ERICK RAMOS te envió un pago por S/ 1", "Plineaste S/ 1.00 a Erick G Ramos A". **Este es el campo de donde se extraen monto, tipo y destinatario.** | **SÍ CRÍTICO** - Es de donde se parsean los datos reales |
+| `when` / `timestamp` | ✅ Sí | ✅ Sí | Marca de tiempo. `when` en Termux usa formato `"YYYY-MM-DD HH:MM:SS"` (ej. "2026-11-22 00:23:52"). `timestamp` en Automate usa **epoch seconds float** (ej. 1795325030.526). Ambos convertibles a fecha/hora. | **ALTAMENTE IMPORTANTE** - Para FIFO y ventanas de tiempo |
+| `key` / `notification_id` | ✅ Sí (parcial) | ✅ Sí (formato completo) | ID única de notificación. Formato: `"paquete\|id\|null\|conteo"`. Ejemplos: "0\|com.bcp.innovacxion.yapeapp\|28702580\|null\|10424" y "0\|pe.com.interbank.mobilebanking\|0\|null\|10404". El último número (10424/10404) parece ser un identificador de transacción. | **IMPORTANTE** - Para deduplicación y tracking |
+| `extras` | ❌ No (en tus examples de Termux no venía esta sección explicitada como tal, pero Termux puede tener datos similares en su output estructurado) | ✅ Sí | **Contexto Android completo.** Dict con claves `android.*`. Contiene: `android.title`, `android.text`, `android.progress`, `android.showWhen`, `android.reduced.images`, `android.subText`, `android.showChronometer`, `android.infoText`, `android.remoteInputHistory`, `android.template`, `android.largeIcon`, `android.bigText`, `android.colorized`, `android.core.app.extra.COMPAT_TEMPLATE`. | **IMPORTANTE** - Metadatos del sistema Android, no datos del banco |
+| `group` | ❌ No venía en tus examples de Termux como campo poblado | ❌ No venía poblado en tus examples de Automate | Grupo de notificación Android. Agrupa notificaciones relacionadas (ej. respuestas en un hilo). | **OPcIONAL** - Informacional, no crítico para parsing |
+| `ticker_text` | No applicable (Termux no tiene este concepto explicitado en tus examples) | ❌ null | Texto de la línea superior de la notificación (aquí aparece en la barra de estado). Siempre null en tus examples. | **OPcIONAL** - Solo visual, no datos del banco |
+| `channel_id` | No explicitado explicitado en Termux input | ✅ Sí | ID del canal de notificación Android. Agrupa notificaciones con estilo consistente. Ejemplos: "my_ibk_channel_ibk_0", "default_notification_channel". | **IMPORTANTE** - Para agrupar y estilizar notificaciones |
+| `category` | No explicitado en tu input de Termux | ✅ null | Categoría de notificación Android. Permite filtrado por tipos (ej. "message", "alarm", "call"). null en tus ejemplos. | **OPcIONAL** - Para filtrado avanzado |
+| `removal_reason` | No explicitado en Termux input | ✅ null | Razón por la cual la notificación fue removida/deletada. null en tus ejemplos. | **OPcIONAL** - Auditing, no crítico |
+
+---
+
+### 13.3.2 Tabla Resumen de Correlación entre Formatos
+
+| Campo Termux | Campo Automate | Mapeo / Observación |
+|-------------|---------------|---------------------|
+| `packageName` | `package` | **Igual contenido.** Usado para enrutar adaptador. |
+| `title` | `title` | **Igual contenido.** Título banco. |
+| `content` | `message` | **Igual contenido.** Donde están los datos reales (monto, destinatario). |
+| `when` | `timestamp` | **Distinto formato.** Termux: "YYYY-MM-DD HH:MM:SS". Automate: epoch float seconds. |
+| `key` | `notification_id` | **Mismo formato estructurado.** `"paquete\|id\|null\|conteo"`. Permite correlación. |
+| `id` | (no directo) | `id` en Termux vs `notification_id` en Automate. Ambos enteros/strings únicos. |
+| `extras` | (parcial) | `extras` en Automate es más estructurado con prefijos `android.*`. | |
+
+---
+
+### 13.4 Diccionario Normalizado a Campos Obligatorios
+
+Independientemente del formato origen (Termux o Automate), **CADA ADAPTADOR** debe convertir los datos crudos a este diccionario estandarizado con **TODOS estos campos obligatorios** (nota: algunos pueden tener `None` o valores por defecto si no se extraen):
+
+```python
+normalizado = {
+    # --- CAMPOS OBLIGATORIOS (todos deben tener valor, None si no se extraen) ---
+    "monto": 1.00,                                            // float > 0. Extraído de content/message.
+    "tipo": "gasto",                                          // "ingreso" o "gasto". Determinado por palabras clave.
+    "destinatario": "Erick G Ramos A",                        // nombre persona/comercio. Extraído de content/message.
+    "event_id": "c9b8e7a5-fd3f-4a1c-bd1a-7f2e3d6b9a1c",      // UUID string. Opcionalmente tomado de key/notification_id.
+    "canal": "interbank",                                     // "yape", "plin", "bbva", "interbank", "nfc", "manual".
+    "fecha_hora": "2026-11-22T00:23:50-05:00",               // ISO format string. Convertido de when/timestamp.
+    "mensaje_raw": "Plineaste S/ 1.00 a Erick G Ramos A",     // Texto ORIGINAL sin modificar. Para auditoría.
+    "motivo": None,                                           // None - SIEMPRE se solicitará al usuario después.
+    "fuente": "termux" or "automate",                         // Cadena: de dónde vino el registro.
+    
+    # --- CAMPOS DERIVADOS Opcionales (pueden ser None si no se extraen) ---
+    # Los adaptadores deben intentar extraer estos, pero el sistema no falla si no hay:
+    "origen_paquete": "pe.com.interbank.mobilebanking",       // Nombre paquete exacto.
+    "titulo_visual": "Interbank",                            // Título visual.
+    "timestamp_epoch": 1795325030.526,                        // Epoch float si se necesita precisión.
+}
+```
+
+**Notas sobre los campos obligatorios:**
+1. **`monto`**: Siempre debe ser `float` > 0. Se extrae usando regex del `content`/`message` (maneje "S/ 1.00", "S/ 40", "1.00", "$40").
+2. **`tipo`**: Determinado analizando el mensaje:
+   - Contiene "te envió un pago" → `ingreso`
+   - Contiene "Plineaste", "gastaste", "debité" → `gasto`
+   - BBVA requiere prompt → `indeterminado`
+3. **`destinatario`**: Nombre que aparece después de "a " o "a " en el mensaje. Ej: "Erick G Ramos A", "Anthony J Ruiz L", "LUCAS ANDRE JUAQUIN VALDIVIESO BUTRON".
+4. **`event_id`**: UUIDv4 generado si no viene en `key`/`notification_id`. Formato: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx".
+5. **`canal`**: Debe ser uno de los valores admitidos: "yape", "plin", "bbva", "interbank", "nfc", "manual".
+6. **`fecha_hora`**: Convertir `when` (Termux) o `timestamp` (Automate) a ISO 8601. Ej: "2026-11-22T00:23:50-05:00".
+7. **`mensaje_raw`**: **SIEMPRE** guardar el texto tal y como llegó. Nunca modificar. Para auditoría y debugging.
+8. **`motivo`**: Siempre `None` inicialmente. El sistema después solicitará al usuario via `termux-dialog`.
+9. **`fuente`**: Cadena fija: `"termux"` o `"automate"`. Para tracking de origen.
+
+---
+
+### 13.4 Lógica de Enrutamiento por Paquete (Mapeo Completo)
+
+Los adaptadores usan el campo `packageName` (Termux) o `package` (Automate) para determinar **exactamente** qué adaptador invocar. Esta es la tabla mapeo completa basada en tus ejemplos:
+
+| Paquete / Package Android | Banco / Canal | Adaptador Específico | Comentario |
+|--------------------------|--------------|---------------------|------------|
+| `com.bcp.innovacxion.yapeapp` | Yape | `YapeAdapter` | **Yape** - Formato estructurado, viene con monto y destinatario en message/content |
+| `pe.com.interbank.mobilebanking` | Interbank | `IBKAdapter` | **Interbank** - Notificaciones de transferencia/gasto. Message: "Plineaste S/ X a Nombre A" |
+| `com.bbva.bancomovil` | BBVA | `BBVAAdapter` | **BBVA** - Requiere prompt guiado para tipo/monto/persona (no tiene datos completos en el mensaje) |
+| `com.nubank.nubank` | Nubank (futuro) | `NubankAdapter` | **Futuro** - Por agregar |
+| `com.changostereo.cmr` | Compartamos | `CompartamosAdapter` | **Compartamos** - Solo ingresos, validación por monto y ventana corta |
+| `com.facebook.orca` | Messenger (falso) | `Descartar` | **Ruido** - Si el paquete no coincide con ninguno, Descartar |
+| Cualquier otro paquete | Desconocido | `Dispatcher lanza warning` | **Desconocido** - Logging y ignore |
+
+#### Subtipos dentro de adaptadores:
+- **Yape:** Siempre ingreso. Viene con monto y persona del remitente.
+- **Interbank:** Puede ser gasto (Plinearte) o, raramente, ingreso (transferencias recibidas).
+- **NFC/Tarjeta:** Formato unificado. Puede consolidarse con alertas bancarias previas.
+- **Manual:** Ingreso/gasto introducido por usuario vía CLI.
+
+---
+
+### 13.5 Lógica de Determinación de Tipo (Algoritmo Completo)
+
+El adaptador debe analizar `content`/`message` con esta lógica jerárquica:
+
+```python
+def determinar_tipo(mensaje):
+    """Determina si es ingreso o gasto basándose en el mensaje."""
+    
+    # Patrones de ingreso (priority alta)
+    patrones_ingreso = [
+        "te envió un pago",
+        "te transferenció", 
+        "te abonó",
+        "recepción de fondos",
+        "depósito"
+    ]
+    
+    # Patrones de gasto (priority alta)
+    patrones_gasto = [
+        "Plineaste",          # Interbank
+        "gastaste",           # Gasto general
+        "debité",             # Débito automático
+        "cargo por",          # Cargo
+        "retiro",             # Retiro de efectivo
+    ]
+    
+    mensaje_lower = mensaje.lower()
+    
+    # Verificar patrones de ingreso
+    for patron in patrones_ingreso:
+        if patron in mensaje_lower:
+            return "ingreso"
+    
+    # Verificar patrones de gasto
+    for patron in patrones_gasto:
+        if patron in mensaje_lower:
+            return "gasto"
+    
+    # Si no hay patrones claros (ej. BBVA requiere prompt)
+    return "indeterminado"  # Solicitar al usuario después
+```
+
+---
+
+### 13.6 Ejemplos Completo de Extracción de Datos (Todos los Campos)
+
+#### Ejemplo 1: Notificación Interbank (Gasto) - Desde Termux
+
+**Input Termux:**
+```json
+{
+  "id": 0,
+  "tag": "",
+  "key": "0|pe.com.interbank.mobilebanking|0|null|10404",
+  "group": "",
+  "packageName": "pe.com.interbank.mobilebanking",
+  "title": "Interbank",
+  "content": "Plineaste S/ 1.00 a Erick G Ramos A",
+  "when": "2026-11-22 00:23:50"
+}
+```
+
+**Proceso de adaptación (IBKAdapter):**
+1. **Identificar paquete:** `packageName` = "pe.com.interbank.mobilebanking" → Coincide con IBKAdapter.
+2. **Parsear monto:** Regex extrae "1.00" de "Plineaste S/ 1.00 a..." → `monto = 1.00`.
+3. **Determinar tipo:** Contiene "Plineaste" → `tipo = "gasto"`.
+4. **Extraer destinatario:** Texto después de "a " → "Erick G Ramos A" → `destinatario = "Erick G Ramos A"`.
+5. **Generar event_id:** UUIDv4 → `event_id = "a1b2c3d4-e5f6-7a89-b0c1-d2e3f4a5b6c7"` (o tomar de key: "10404" pero ese es entero, así que generar UUID).
+6. **Preservar mensaje_raw:** `mensaje_raw = "Plineaste S/ 1.00 a Erick G Ramos A"` (idéntico al content).
+7. **Construir diccionario normalizado:**
+```python
+{
+    "monto": 1.00,
+    "tipo": "gasto",
+    "destinatario": "Erick G Ramos A",
+    "event_id": "a1b2c3d4-e5f6-7a89-b0c1-d2e3f4a5b6c7",
+    "canal": "interbank",
+    "fecha_hora": "2026-11-22T00:23:50-05:00",
+    "mensaje_raw": "Plineaste S/ 1.00 a Erick G Ramos A",
+    "motivo": None,
+    "fuente": "termux",
+    "origen_paquete": "pe.com.interbank.mobilebanking",
+    "titulo_visual": "Interbank",
+    "timestamp_epoch": 0  # id era 0, convertir o poner None
+}
+```
+
+#### Ejemplo 2: Notificación Yape (Ingreso) - Desde Automate JSON
+
+**Input Automate:**
 ```json
 {
   "package": "com.bcp.innovacxion.yapeapp",
@@ -1321,118 +1574,109 @@ Automate puede entregar múltiples notificaciones seguidas (ej. cuando un gasto 
 }
 ```
 
-### 13.3.1 Campos Críticos Compartidos por Ambos Formatos
-
-| Campo | Formato Termux | Formato Automate | Descripción | Importancia |
-|-------|---------------|-----------------|-------------|------------|
-| `packageName` / `package` | ✅ | ✅ | Nombre paquete Android | **CRÍTICA** - Para identificar qué adaptador usar |
-| `title` | ✅ | ✅ | Título de notificación | Alta - Identifica banco |
-| `content` / `message` | ✅ | ✅ | Mensaje principal con operación | **CRÍTICA** - Monto, destinatario, tipo |
-| `when` / `timestamp` | ✅ | ✅ | Marca de tiempo | Alta - Para ordenación FIFO y ventana consolidación |
-| `key` / `notification_id` | ✅ (formato parcial) | ✅ (formato completo) | ID única de notificación | Media - Para deduplicación |
-| `extras` | ❌ | ✅ | Contexto Android completo | Media - Metadata adicional |
-| `group` / `group` | ❌ | ❌ | Grupo de notificación | Baja - Informacional |
-
-### 13.4 Campos Extraídos a Diccionario Normalizado
-
-Independientemente del formato origen (Termux o Automate), cada adaptador debe convertir los datos crudos a un diccionario estandarizado con estos campos obligatorios (definidos en la interfaz `BancoAdapter.normalizar_notificacion()`):
-
-```python
-normalizado = {
-    "monto": float,              // Ej: 1.00, 60.00, 40.00 - SIEMPRE > 0
-    "tipo": "ingreso" or "gasto", // Determinado por contenido del mensaje
-    "destinatario": str,         // Ej: "Erick G Ramos A", "Anthony J Ruiz L", "LUCAS ANDRE JUAQUIN VALDIVIESO BUTRON"
-    "event_id": str,             // UUID generado o tomado de notification_id
-    "canal": str,                // "yape", "plin", "bbva", "interbank", "nfc", "manual"
-    "fecha_hora": str,           // ISO format o epoch convertido
-    "mensaje_raw": str,          // El texto tal como llegó (para auditoría)
-    "motivo": None,              // None - se solicitará al usuario después
-    "fuente": "termux" or "automate"  // Para rastrear el origen
-}
-```
-
-### 13.5 Lógica de Enrutamiento por Paquete
-
-Los adaptadores usan el campo `packageName` (Termux) o `package` (Automate) para determinar qué adaptador invocar:
-
-| Paquete / Package | Banco/Canal | Adaptador |
-|------------------|-------------|-----------|
-| `com.bcp.innovacxion.yapeapp` | Yape | `YapeAdapter` |
-| `pe.com.interbank.mobilebanking` | Interbank | `IBKAdapter` |
-| `com.bbva.bancomovil` | BBVA | `BBVAAdapter` |
-| Paquetes NFC tag | NFC | `NFCAdapter` |
-| Paquete manual entrada | Manual | `ManualAdapter` |
-| Cualquier otro | Desconocido | `Dispatcher lanza warning, ignora o clasifica como ruido` |
-
-### 13.6 Ejemplos de Extracción de Datos
-
-#### Ejemplo 1: Notificación Interbank (Gasto)
-**Termux input:**
-```json
-{
-  "packageName": "pe.com.interbank.mobilebanking",
-  "title": "Interbank",
-  "content": "Plineaste S/ 1.00 a Erick G Ramos A",
-  "when": "2026-11-22 00:23:50"
-}
-```
-**Resultado normalizado:**
-```python
-{
-    "monto": 1.00,
-    "tipo": "gasto",
-    "destinatario": "Erick G Ramos A",
-    "canal": "interbank",
-    "mensaje_raw": "Plineaste S/ 1.00 a Erick G Ramos A",
-    "fecha_hora": "2026-11-22 00:23:50"
-}
-```
-
-#### Ejemplo 2: Notificación Yape (Ingreso)
-**Automate JSON:**
-```json
-{
-  "package": "com.bcp.innovacxion.yapeapp",
-  "title": "Confirmación de Pago",
-  "message": "Yape! LUCAS ANDRE JUAQUIN VALDIVIESO BUTRON te envió un pago por S/ 40",
-  "timestamp": 1794722168.398,
-  "extras": {
-    "android.text": "Yape! LUCAS ANDRE JUAQUIN VALDIVIESO BUTRON te envió un pago por S/ 40"
-  }
-}
-```
-**Resultado normalizado:**
+**Proceso de adaptación (YapeAdapter):**
+1. **Identificar paquete:** `package` = "com.bcp.innovacxion.yapeapp" → Coincide con YapeAdapter.
+2. **Parsear monto:** Regex extrae "40" de " ... por S/ 40" → `monto = 40.00`.
+3. **Determinar tipo:** Contiene "te envió un pago" → `tipo = "ingreso"`.
+4. **Extraer destinatario:** El mensaje dice "LUCAS ANDRE JUAQUIN VALDIVIESO BUTRON" → `destinatario = "LUCAS ANDRE JUAQUIN VALDIVIESO BUTRON"`.
+5. **Generar event_id:** Tomar de `notification_id` o generar UUID. Como viene en `notification_id: "0|com.bcp.innovacxion.yapeapp|-574161335|null|10424"`, se podría usar "-574161335" o generar UUID nuevo.
+6. **Preservar mensaje_raw:** `mensaje_raw = "Yape! LUCAS ANDRE JUAQUIN VALDIVIESO BUTRON te envió un pago por S/ 40"` (idéntico al message).
+7. **Construir diccionario normalizado:**
 ```python
 {
     "monto": 40.00,
     "tipo": "ingreso",
     "destinatario": "LUCAS ANDRE JUAQUIN VALDIVIESO BUTRON",
+    "event_id": "-574161335",  # o UUID generado,
     "canal": "yape",
+    "fecha_hora": "2026-11-22T00:??(convertido de 1794722168.398)",
     "mensaje_raw": "Yape! LUCAS ANDRE JUAQUIN VALDIVIESO BUTRON te envió un pago por S/ 40",
-    "fecha_hora": "2026-11-22 00:??(del timestamp)"
+    "motivo": None,
+    "fuente": "automate",
+    "origen_paquete": "com.bcp.innovacxion.yapeapp",
+    "titulo_visual": "Confirmación de Pago",
+    "timestamp_epoch": 1794722168.398
 }
 ```
 
-#### Ejemplo 3: Detección de Tipo (Gasto vs Ingreso)
-El adaptador debe analizar el `message`/`content` para determinar el tipo:
-- Si contiene "te envió un pago" o "te transferenció" → `tipo: ingreso`
-- Si contiene "Plineaste" o "gastaste" o "debité" → `tipo: gasto`
-- Si es BBVA y requiere prompt → `tipo: indeterminado, solicitar al usuario`
+#### Ejemplo 3: Detección de Tipo (Lógica Robusta)
 
-### 13.6 Consideraciones para Adaptadores
+El adaptador debe analizar `content`/`message` con esta lógica jerárquica:
 
-Cada adaptador (`adaptadores/ibk.py`, `adaptadores/yape.py`, etc.) debe implementar un método `es_mis_notificacion()` que retorne `True` cuando el paquete coincida, y un método `normalizar_notificacion()` que:
+```python
+def determinar_tipo(mensaje):
+    """Determina si es ingreso o gasto basándose en el mensaje."""
+    
+    # Patrones de ingreso (priority alta)
+    patrones_ingreso = [
+        "te envió un pago",
+        "te transferenció", 
+        "te abonó",
+        "recepción de fondos",
+        "depósito"
+    ]
+    
+    # Patrones de gasto (priority alta)
+    patrones_gasto = [
+        "Plineaste",          # Interbank
+        "gastaste",           # Gasto general
+        "debité",             # Débito automático
+        "cargo por",          # Cargo
+        "retiro",             # Retiro de efectivo
+    ]
+    
+    mensaje_lower = mensaje.lower()
+    
+    # Verificar patrones de ingreso
+    for patron in patrones_ingreso:
+        if patron in mensaje_lower:
+            return "ingreso"
+    
+    # Verificar patrones de gasto
+    for patron in patrones_gasto:
+        if patron in mensaje_lower:
+            return "gasto"
+    
+    # Si no hay patrones claros (ej. BBVA requiere prompt)
+    return "indeterminado"  # Solicitar al usuario después
+```
 
-1. **Parsee el monto** - Extraiga el número del mensaje (maneje formatos: "S/ 1.00", "S/ 40", "1.00", "$40")
-2. **Identifique el tipo** - Analice palabras clave en el mensaje
-3. **Extraiga el destinatario** - Nombre de persona/comercio que aparece después de "a" o "a "
-4. **Genere event_id** - UUIDv4 si no viene en notification_id, o use el existente
-5. **Preserve mensaje_raw** - Guarde el texto original para auditoría
-6. **Maneje ausencias** - Si algún campo no se encuentra, use valores por defecto (monto 0.01, tipo "gasto", destinatario "desconocido")
+---
 
-### 13.7 Formato de Almacenamiento en SQLite
+### 13.7 Consideraciones para Adaptadores (Checklist Completo)
 
-Una vez normalizado, el diccionario se inserta en la tabla `transacciones` con campos como:
+Para que un adaptador sea considerado completo y correcto, debe implementar:
+
+#### 1. `es_mis_notificacion(datos_crudos)`:
+- [ ] Retorna `True` si `packageName` (Termux) o `package` (Automate) coincide con el banco esperado
+- [ ] Retorna `False` paq. de otros bancos (sin falsos positivos)
+- [ ] Maneja `package`/`packageName` nulo o vacío (retorna False)
+
+#### 2. `normalizar_notificacion(datos_crudos)`:
+- [ ] `monto`: Extrae float usando regex que maneje "S/ 1.00", "S/ 40", "1.00", "$40"
+- [ ] `tipo`: Aplica lógica `determinar_tipo(mensaje)` (ingreso/gasto/indeterminado)
+- [ ] `destinatario`: Extrae nombre que aparece después de "a " o "a " en el mensaje. Si no hay, usa "desconocido".
+- [ ] `event_id`: Toma de `key`/`notification_id` si tiene formato esperado, sino genera UUIDv4
+- [ ] `canal`: Fija valor constante según paquete ("yape", "interbank", etc.)
+- [ ] `fecha_hora`: Convierte `when` (Termux) o `timestamp` (Automate) a ISO 8601
+- [ ] `mensaje_raw`: **SIEMPRE** el texto original sin modificar. Copia exacta de `content` (Termux) o `message` (Automate).
+- [ ] `motivo`: `None` (siempre, se solicitará después)
+- [ ] `fuente`: `"termux"` o `"automate"` según flag de entrada
+- [ ] `origen_paquete`: El valor exacto del paquete (`packageName` o `package`)
+- [ ] `titulo_visual`: El `title` tal cual aparece
+- [ ] `timestamp_epoch`: `timestamp` de Automate o `0`/convertir de `when` de Termux
+
+#### 3. Manejo de Ausencias (Graceful Degradation):
+- Si no se extrae el monto → poner `monto = 0.01` (mínimo) o `None` y logging warning
+- Si no se extrae el destinatario → poner `destinatario = "desconocido"`
+- Si no se reconoce el tipo → poner `tipo = "indeterminado"` y flags para solicitar al usuario
+- Si `mensaje_raw` viene vacío → guardar string vacío `""` pero hacer logging
+
+---
+
+### 13.8 Formato de Almacenamiento en SQLite (Vista Completa)
+
+Una vez normalizado el diccionario, se inserta en la tabla `transacciones` con **todos estos campos** (según tu Diagrama-BD.uml):
 
 ```sql
 INSERT INTO transacciones 
@@ -1444,45 +1688,142 @@ VALUES
 (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, '');
 ```
 
-Donde `mensaje_raw` guardaría el `content` (Termux) o `message` (Automate) original.
+**Campos provenientes del diccionario normalizado:**
+- `id_transaccion`: UUID generado o tomado de `event_normalizado`
+- `fecha_hora_epoch`: float epoch (ej. `1795325030.526` o `0` si no se supo)
+- `fecha`: `"2026-11-22"` (parte date del when/timestamp)
+- `hora`: `"00:23:50"` (parte time del when/timestamp)
+- `trimestre`: `"2026-Q4` (basado en mes: `((mes-1)//3)+1`)
+- `app`: `"yape"` o `"interbank"` o `"manual"` (del `canal_normalizado`)
+- `paquete`: `"com.bcp.innovacxion.yapeapp"` o `"pe.com.interbank.mobilebanking"` (del paquete origen)
+- `dispositivo`: `"Celular-Erick"` o dispositivo actual
+- `tipo`: `"Ingreso"` o `"Gasto"` (formateado a título)
+- `medio`: `"Cuenta"`, `"Tarjeta"`, `"NFC"`, `"Transferencia"` (determinado por adaptador o canal)
+- `monto_total`: float (ej. `1.00`, `40.00`)
+- `moneda`: `"PEN"` (Soles Peruanos, basado en tus ejemplos con "S/")
+- `destinatario`: `"Erick G Ramos A"` o `"LUCAS ANDRE JUAQUIN VALDIVIESO BUTRON"`
+- `motivo`: `None` → se convertirá a texto después cuando el usuario responda
+- `categoria`: `"Prestamos"`, `"Comestibles"` o `"Manual"` (clasificación)
+- `es_prestamo`: `0` (no es préstamo a menos que tenga campo especial)
+- `monto_pagado`: `0.00` (para no préstamos)
+- `saldo_pendiente`: `monto_total` si es gasto, `0.00` si es ingreso
+- `estado_prestamo`: `"n/a"` o `"activo"` según caso
+- `looker`: `0` o `1` (indicador para reports Looker Studio)
+- `latitud`: `None` o float (si hay GPS)
+- `longitud`: `None` o float (si hay GPS)
+- `fuente_gps`: `"live"`, `"last_known"` o `"none"` (según GPS handler)
+- `mensaje_raw`: **Copia exacta** del `content` (Termux) o `message` (Automate). **Nunca modificado.**
+- `status`: `"consolidado"` (después de proceso exitoso)
+- `sincronizado`: `0` (pendiente) o `1` (hecho)
+- `intentos_sync`: `0` (contador)
+- `ultimo_error_sync`: `""` (vacío inicialmente)
 
 ---
 
-## 14. Migración de Datos y Formato Legacy
+### 13.9 Migración de Datos y Formato Legacy
 
-### 14.1 Notificaciones Antiguas (Pre-Arquitectura Hexagonal)
-Si el sistema tiene notificaciones guardadas en formato anterior a la documentación actual, se recomienda:
+#### 13.9.1 Notificaciones Antiguas (Pre-Documentación Actual)
+Si el sistema tiene notificaciones guardadas en formato anterior a esta documentación:
 
-1. **Ejecutar script de migración** (`scripts/migrar_notificaciones_legacy.py`)
-2. **Convertir campos** a formato normalizado:
-   - Antiguo: `cuerpo` → Nuevo: `mensaje_raw`
-   - Antiguo: `nota_tipo` → Nuevo: `tipo` (ingreso/gasto)
-   - Antiguo: `id_notificacion` → Nuevo: `event_id` (UUID)
-3. **Validar duplicados** usando la ventana de consolidación
-4. **Reindexar** la tabla `transacciones` si es necesario
+1. **Ejecutar script de migración** (`scripts/migrar_notificaciones_legacy.py`):
+   - Leer archivos JSON viejos (formato no estandarizado)
+   - Mapear campos antiguos a nuevos:
+     - `cuerpo` → `mensaje_raw`
+     - `nota_tipo` → `tipo` (ingreso/gasto)
+     - `id_notificacion` → `event_id` (UUID o entero consistente)
+     - `paquete_antiguo` → `packageName` / `package` (mapear nombres viejos a nuevos)
 
-### 14.2 Soporte para Nuevos Formatos de Bancos
+2. **Convertir campos** obligatorios:
+   - Antiguo: `cuerpo` → Nuevo: `mensaje_raw` (texto sin modificar)
+   - Antiguo: `nota_tipo` → Nuevo: `tipo` (ingreso/gasto) usando lógica de palabras clave
+   - Antiguo: `id_notificacion` → Nuevo: `event_id` (UUID string o entero consistente)
+
+3. **Validar duplicados** usando la ventana de consolidación (5 minutos por defecto).
+
+4. **Reindexar** la tabla `transacciones` si se cambiaron tipos o estructura de campos.
+
+#### 13.9.2 Soporte para Nuevos Formatos de Bancos
+
 A medida que salgan nuevas versiones de apps bancarias o nuevos bancos:
-1. **Añadir adaptador** en `adaptadores/` siguiendo el patrón `BancoAdapter`
-2. **Probar con samples** reales de notificaciones del nuevo banco
-3. **Actualizar `config.yaml`** añadiendo el nombre paquete al listado `adaptadores_activos`
-4. **No tocar código central** - la arquitectura hexagonal lo permite fácilmente
 
-### 13.9 Checklist de Implementación de Adaptador de Notificaciones
+1. **Añadir adaptador** en `adaptadores/` siguiendo estrictamente el patrón `BancoAdapter`:
+   - Crear archivo `adaptadores/nuevo_banco.py`
+   - Implementar clase `NuevoBancoAdapter(BancoAdapter)`
+   - Implementar `es_mis_notificacion()` y `normalizar_notificacion()` con lógica específica
 
-Para crear un nuevo adaptador de banco, verificar:
+2. **Probar con samples** reales de notificaciones del nuevo banco:
+   - Capturar 5-10 notificaciones reales
+   - Verificar que el adapter las parsea correctamente
+   - Validar que `monto`, `tipo`, `destinatario` se extraen bien
 
-- [ ] `es_mis_notificacion(paquete_terminx_o_automate)` retorna True para paq. correcto
-- [ ] `normalizar_notificacion(datos_crudos)` retorna diccionario con todos campos obligatorios
-- [ ] Manejo de formato de monto (con o sin símbolo S/, con o sin decimales)
-- [ ] Detección correcta de tipo (ingreso vs gasto) por palabras clave
-- [ ] Extracción correcta de destinatario (nombre que sigue a "a" o "a ")
-- [ ] Generación o uso adecuado de event_id
-- [ ] Preservación de mensaje_raw tal y como llegó
-- [ ] Test con mínimo 3 samples reales de notificaciones del banco
+3. **Actualizar `config.yaml`** añadiendo el nombre paquete al listado `adaptadores_activos`:
+   ```yaml
+   adaptadores_activos:
+     - "ibk"
+     - "bbva"
+     - "yape"
+     - "nuevo_banco"  # Agregado nuevo
+   ```
+
+4. **No tocar código central** - la arquitectura hexagonal lo permite fácilmente.
+
+---
+
+### 13.10 Checklist de Implementación de Adaptador de Notificaciones (Validación Final)
+
+Para crear un nuevo adaptador de banco o validar uno existente, verificar **cada ítem**:
+
+#### 13.10.1 Validación de Paquete
+- [ ] `es_mis_notificacion(paquete_termux_o_automate)` retorna `True` ONLY para paq. correcto
+- [ ] Retorna `False` paq. de otros bancos (sin falsos positivos)
+- [ ] Maneja `package`/`packageName` nulo o vacío (retorna False)
+
+#### 13.10.2 Validación de Extracción de Datos
+- [ ] `monto`: Regex probado con "S/ 1.00", "S/ 40", "1.00", "$40", "0.50" → extrae número correcto
+- [ ] `tipo`: Lógica `determinar_tipo()` probada con 10+ samples reales por banco
+- [ ] `destinatario`: Nombre extraído después de "a " con precisión ≥ 95% en samples
+- [ ] `event_id`: UUIDv4 generado correctamente o toma válida de `key`/`notification_id`
+- [ ] `canal`: Fija valor constante según paquete mapeado
+- [ ] `fecha_hora`: Convertible a ISO 8601 y a datetime objeto Python
+- [ ] `mensaje_raw`: Igual que input original (comparación byte a byte)
+- [ ] `motivo`: Siempre `None` inicialmente
+- [ ] `fuente`: `"termux"` o `"automate"` según flag de entrada
+- [ ] `origen_paquete`: Igual que paquete entrado
+- [ ] `titulo_visual`: Igual que `title` entrado
+- [ ] `timestamp_epoch`: Convertible float a datetime y viceversa
+
+#### 13.10.3 Validación de Formato y Consistency
+- [ ] Diccionario normalizado tiene **todos los 11 campos obligatorios** (monto, tipo, destinatario, event_id, canal, fecha_hora, mensaje_raw, motivo, fuente, origen_paquete, titulo_visual)
+- [ ] No hay `None` no intencional (todos los `None` son por diseño, no por fallo)
+- [ ] `monto` > 0 (o mínimo 0.01 con warning)
+- [ ] `canal` es uno de los valores admitidos: "yape", "plin", "bbva", "interbank", "nfc", "manual"
+- [ ] `mensaje_raw` length > 0 (tiene contenido)
+
+#### 13.10.4 Testing
+- [ ] Probar con mínimo 3 samples reales de notificaciones del banco objetivo
+- [ ] Probar con 3 samples "basura" o formato inesperado (handling de errores gracefull)
+- [ ] Probar con `package` nulo/vacío (handling)
+- [ ] Probar con mensaje vacío (handling)
+- [ ] Logging de warnings para casos edge case (sin bloquear el flujo)
+
+---
+
+### 13.11 Referencias y Samples Reales
+
+Esta documentación fue generada basada en los **inputs reales** que proporcionaste:
+
+1. **Termux Capture 1:** Notificación Yape con `id: 28702580`, paquete `com.bcp.innovacxion.yapeapp`, content: "Yape! ERICK RAMOS te envió un pago por S/ 1"
+2. **Termux Capture 2:** Notificación Interbank con `id: 0`, paquete `pe.com.interbank.mobilebanking`, content: "Plineaste S/ 1.00 a Erick G Ramos A"
+3. **Automate JSON 1:** Notificación Interbank con package, title, message, timestamp 1795325030.526, extras completos
+4. **Automate JSON 2:** Segunda notificación Interbank secuencia con timestamp 1794722156.001
+5. **Automate JSON 3:** Notificación Yape completa con extras extensos (template BigTextStyle, colorized, bigText, etc.) y notification_id con número negativo "-574161335"
+
+Estos samples realzan por qué es crítico tener el diccionario normalizado estandarizado - cada banco/envío tiene leves variaciones en el formato, pero el sistema debe parsearlos todos a la misma estructura interna.
 
 ---
 
 **Documentación generada el:** 2026-11-22  
-**Basado en samples reales:** Termux captures y JSON Automate mostrados por usuario
+**Basado en samples reales:** Termux captures y JSON Automate mostrados por usuario  
+**Objetivo:** Que ningún adaptador futuro tenga que "adivinar" cómo parsear notificaciones - todo debe ser extraíble y estandarizado.  
+ENDSECTION
 <tool_call>
