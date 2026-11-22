@@ -45,7 +45,7 @@ mapeo_adaptadores:
 # Directorio donde la app Automate deja los archivos JSON con los datos de notificación.
 # Este es el path por defecto que el sistema leerá al iniciar en modo automate_broker.
 # En Android typically: /sdcard/Automate/notify
-directorio_archivos_automate: "/sdcard/Automate/notify"
+directorio_archivos_automate: "/sdcard/storage/shared/Documents/noti.json"
   # Puedo personalizar esto según el entorno:
   # - En Termux/Linux: /home/usuario/Automate/notify
   # - En Android real: /sdcard/Automate/notify

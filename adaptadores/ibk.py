@@ -4,10 +4,13 @@ Soporte para notificaciones de Interbank Mobile Banking incluyendo:
 - Transferencias de gasto (formato: "TRAN S/ X.00\nA: Nombre")
 - Gastos Plin (formato: "Plineaste S/ X.00 a Nombre")
 - Consumos con tarjeta (formato: "Realizaste un consumo con tu tarjeta.")
+- Pagos con NFC/Wallet (formato: "S/ X.XX con Nombre ••XXXX")
 
 Manejo de validación de duplicados en ventana de 5 minutos con tracking
 por formato. Solicita siempre motivo al usuario vía termux-dialog.
 Solo solicita monto cuando el formato es tarjeta (monto vacío en mensaje).
+El sistema consolidará automáticamente notificaciones NFC e Interbank
+que correspondan al mismo gasto, independientemente del orden de llegada.
 """
 
 import re
@@ -37,15 +40,21 @@ class IBKAdapter:
         return paquete == "pe.com.interbank.mobilebanking"
 
     def _clasificar_formato(self, mensaje: str) -> str:
-        """Detecta el tipo de notificación: 'transferencia', 'plin', 'tarjeta' o 'desconocido'.
+        """Detecta el tipo de notificación: 'transferencia', 'plin', 'tarjeta', 'nfc' o 'desconocido'.
 
         Prioridad:
-        1. Formato TRAN: mensaje contiene "tran" (mayúsculas)
-        2. Formato Plin: mensaje contiene "plineaste" (minúsculas)
-        3. Formato Tarjeta: mensaje contiene "consumo" o "tarjeta" con "realizaste"
-        4. Desconocido: ningún patrón coincide
+        1. Formato NFC: mensaje contiene "walletnfcrel" o patrón "S/ con ... ••"
+        2. Formato TRAN: mensaje contiene "tran" (mayúsculas)
+        3. Formato Plin: mensaje contiene "plineaste" (minúsculas)
+        4. Formato Tarjeta: mensaje contiene "consumo" o "tarjeta" con "realizaste"
+        5. Desconocido: ningún patrón coincide
         """
         mensaje_lower = mensaje.lower()
+
+        # 1. Detectar formato NFC (Google Pay walletnfcrel)
+        # Patrones: "S/ 63.67 con Infinite ••9820" o "S/ 63.67 con Infinite"
+        if "walletnfcrel" in mensaje_lower or re.search(r"s/\s+[\d,.]+\s+con\s+", mensaje_lower):
+            return "nfc"
 
         if "tran" in mensaje_lower:
             return "transferencia"
@@ -168,36 +177,18 @@ class IBKAdapter:
                     tiempo_ultimo, formato_anterior, monto_anterior = (
                         self._ultimos_gastos[destinatario]
                     )
-                    if formato_anterior == "transferencia":
-                        # Mismo formato TRAN - validar ventana 5 min + monto igual
-                        # Convertir float a datetime para comparación
-                        tiempo_ultimo_dt = datetime.fromtimestamp(float(tiempo_ultimo))
-                        diferencia = (fecha_actual - tiempo_ultimo_dt).total_seconds()
-                        if diferencia < 300 and monto == monto_anterior:
-                            # Es duplicado real TRAN + TRAN
-                            self._ultimos_gastos[destinatario] = (
-                                timestamp_epoch,
-                                "transferencia",
-                                monto,
-                            )
-                            return True
-                        else:
-                            # Mismo destinatario pero diferente monto o tiempo pasado
-                            self._ultimos_gastos[destinatario] = (
-                                timestamp_epoch,
-                                "transferencia",
-                                monto,
-                            )
-                            return False
-                    else:
-                        # Formato anterior era distinto a TRAN (tarjeta o plin)
-                        # NO es duplicado, consolidar
-                        self._ultimos_gastos[destinatario] = (
-                            timestamp_epoch,
-                            "transferencia",
-                            monto,
-                        )
-                        return False
+                    # MISMO TIPO NUNCA es duplicado (TRAN + TRAN, PLIN + PLIN, TARJETA + TARJETA)
+                    # Siempre que el formato anterior sea igual al actual, no es duplicado
+                    # Actualizar tracking pero NO marcar como duplicado
+                    self._ultimos_gastos[destinatario] = (
+                        timestamp_epoch,
+                        "transferencia",
+                        monto,
+                    )
+                    return False  # Mismo tipo TRAN + TRAN = NUNCA duplicado
+                    # NOTE: Antes aquí validaba ventana 5 min + monto, pero según nuevas reglas
+                    # el mismo tipo siempre son gastos distintos
+                    # Si formato_anterior distinto a transferencia, caería en el else abajo
                 else:
                     self._ultimos_gastos[destinatario] = (
                         timestamp_epoch,
@@ -212,31 +203,18 @@ class IBKAdapter:
                     tiempo_ultimo, formato_anterior, monto_anterior = (
                         self._ultimos_gastos[destinatario]
                     )
-                    if formato_anterior == "tarjeta":
-                        # Mismo formato tarjeta - validar ventana 5 min
-                        # Convertir float a datetime para comparación
-                        tiempo_ultimo_dt = datetime.fromtimestamp(float(tiempo_ultimo))
-                        diferencia = (fecha_actual - tiempo_ultimo_dt).total_seconds()
-                        if diferencia < 300 and monto == monto_anterior:
-                            # Posible duplicado: mismo monto y misma ventana corta
-                            return True
-                        else:
-                            # Diferente tiempo o monto → nueva transacción
-                            self._ultimos_gastos[destinatario] = (
-                                timestamp_epoch,
-                                "tarjeta",
-                                monto,
-                            )
-                            return False
-                    else:
-                        # Formato anterior era distinto a tarjeta (TRAN o plin)
-                        # NO es duplicado, consolidar (ese es el mismo gasto en secuencia TRAN→Tarjeta o Plina→Tarjeta)
-                        self._ultimos_gastos[destinatario] = (
-                            timestamp_epoch,
-                            "tarjeta",
-                            monto,
-                        )
-                        return False
+                    # MISMO TIPO NUNCA es duplicado (TARJETA + TARJETA)
+                    # Siempre que el formato anterior sea igual al actual, no es duplicado
+                    # Actualizar tracking pero NO marcar como duplicado
+                    self._ultimos_gastos[destinatario] = (
+                        timestamp_epoch,
+                        "tarjeta",
+                        monto,
+                    )
+                    return False  # Mismo tipo TARJETA + TARJETA = NUNCA duplicado
+                    # NOTE: Antes aquí validaba ventana 5 min + monto, pero según nuevas reglas
+                    # el mismo tipo siempre son gastos distintos
+                    # Si formato_anterior distinto a tarjeta, caería en el else abajo
                 else:
                     self._ultimos_gastos[destinatario] = (
                         timestamp_epoch,
