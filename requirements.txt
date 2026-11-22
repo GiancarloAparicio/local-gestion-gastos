@@ -1,25 +1,29 @@
 # ============================================================
 # Requerimientos: local-gestion-gastos
 # ============================================================
-# NOTA: Este proyecto usa solo Python estándar.
-# No requiere librerías de terceros (flask, django, numpy, etc.).
-# Los siguientes "paquetes" son solo para documentación 
-# y no se instalan vía pip (son parte del núcleo de Python).
+# Este proyecto usa Python estándar + una dependencia externa.
+# Los módulos locales (adaptadores/, modulios/) se copian manualmente
+# y no se instalan vía pip.
 # ============================================================
 
-# Python estándar (versión 3.8+ recomendada)
-# python >= 3.8  # Comentado: pip no instala el intérprete
+# Dependencia externa necesaria:
+# -----------
+# PyYAML - para análisis de notificaciones y configuración
+# Instalación: pip install pyyaml
+# -----------
 
-# Módulos incluidos en Python estándar (no requieren instalación pip):
+pyyaml >= 6.0
+
+# Nota: Los siguientes módulos forman parte del núcleo de Python
+# y no requieren instalación separada:
 # - re, uuid, time, datetime, json, os, sys, logging, subprocess
-# - typing (Optional, List, Dict, Any)
+# - typing (Optional, Dict, List, Any)
 # - collections, hashlib, base64, math, etc.
 
-# Módulos del proyecto (archivos .py locales, NO pip):
+# Módulos del proyecto (archivos .py locales):
 # - adaptadores.ibk, adaptadores.nfc, adaptadores.bbva
 # - adaptadores.compartamos, adaptadores.manual, adaptadores.yape
 # - modulios.termux_api, modulios.consolidador
 # - modulios.validador, modulios.fifo_cola
-#
-# Estos archivos se copian manualmente o vienen con el proyecto.
+# Estos se copian manualmente o vienen con el proyecto.
 # ============================================================
