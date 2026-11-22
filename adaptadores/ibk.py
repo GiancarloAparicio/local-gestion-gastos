@@ -129,6 +129,7 @@ class IBKAdapter:
 
             # Caso especial: formato PLIN
             # 2 plines iguales a la misma persona NUNCA son duplicado
+            # Si el formato es distinto a plin (TRAN, tarjeta), consolidar y NO duplicar
             if formato_tipo == "plin":
                 if destinatario in self._ultimos_gastos:
                     tiempo_ultimo, formato_anterior, monto_anterior = (
@@ -145,8 +146,14 @@ class IBKAdapter:
                         return False  # No es duplicado, es un evento independiente
                     else:
                         # Formato anterior era distinto a plin (TRAN o tarjeta)
-                        diferencia = (fecha_actual - tiempo_ultimo).total_seconds()
-                        return diferencia < 300  # Ventana corta para formato distinto
+                        # SE CONSOLIDA: no es duplicado, es el mismo gasto en secuencia distinta
+                        # Actualizar tracking manteniendo el formato actual
+                        self._ultimos_gastos[destinatario] = (
+                            timestamp_epoch,
+                            "plin",
+                            monto,
+                        )
+                        return False  # No es duplicado, consolidar con registro existente
                 else:
                     self._ultimos_gastos[destinatario] = (
                         timestamp_epoch,
@@ -163,7 +170,9 @@ class IBKAdapter:
                     )
                     if formato_anterior == "transferencia":
                         # Mismo formato TRAN - validar ventana 5 min + monto igual
-                        diferencia = (fecha_actual - tiempo_ultimo).total_seconds()
+                        # Convertir float a datetime para comparación
+                        tiempo_ultimo_dt = datetime.fromtimestamp(float(tiempo_ultimo))
+                        diferencia = (fecha_actual - tiempo_ultimo_dt).total_seconds()
                         if diferencia < 300 and monto == monto_anterior:
                             # Es duplicado real TRAN + TRAN
                             self._ultimos_gastos[destinatario] = (
@@ -205,8 +214,9 @@ class IBKAdapter:
                     )
                     if formato_anterior == "tarjeta":
                         # Mismo formato tarjeta - validar ventana 5 min
-                        # Las tarjetas pueden ser compras diferentes en mismo establecimiento
-                        diferencia = (fecha_actual - tiempo_ultimo).total_seconds()
+                        # Convertir float a datetime para comparación
+                        tiempo_ultimo_dt = datetime.fromtimestamp(float(tiempo_ultimo))
+                        diferencia = (fecha_actual - tiempo_ultimo_dt).total_seconds()
                         if diferencia < 300 and monto == monto_anterior:
                             # Posible duplicado: mismo monto y misma ventana corta
                             return True
