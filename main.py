@@ -6,6 +6,7 @@ from adaptadores.infraestructura.sqlite_adapter import SQLiteAdapter
 from modulios.logger import info, warning, error
 from modulios.termux_api import TermuxAPI
 from modulios.consolidador import Consolidador
+import pprint
 
 # ===================================================================
 # CONFIGURACIÓN CENTRAL (leída de config.yaml)
@@ -150,72 +151,164 @@ def cmd_insertar(motivo, monto, tipo, destinatario, adapter, adaptadores):
         import traceback
         traceback.print_exc()
 
+def _resumen_estructura(obj, max_len=2000):
+    """Devuelve tipo, claves/estructura y representación legible sin romper por tipos raros."""
+    tipo_nombre = type(obj).__name__
+    claves = list(obj.keys()) if isinstance(obj, dict) else None
+    try:
+        representacion = json.dumps(obj, ensure_ascii=False, indent=2, default=str)
+    except Exception:
+        representacion = pprint.pformat(obj, depth=4, width=100)
+
+    if len(representacion) > max_len:
+        representacion = representacion[:max_len] + f"\n... [truncado, total {len(representacion)} chars]"
+
+    return tipo_nombre, claves, representacion
+
 # ===================================================================
 # FUNCIÓN: Procesar notificación (pipeline automate_broker)
 # ===================================================================
 def procesar_notificacion(datos_crudos, adapter, adaptadores, termux_api, ventana_minutos):
     from modulios.consolidador import Consolidador
-    
-    # 1. Enrutar adaptador
-    paquete = datos_crudos.get('packageName', '') or datos_crudos.get('package', '')
-    adaptador_local = encontrar_adaptador(paquete, adaptadores)
-    if not adaptador_local:
-        warning("Ningún adaptador reconoció este paquete: " + paquete)
-        return False
-    
-    # 2. Normalizar
-    normalizado = adaptador_local.normalizar_notificacion(datos_crudos)
-    
-    # 2B. Validar duplicado (misma tipo NUNCA es duplicado)
-    c = Consolidador(ventana_minutos=ventana_minutos)
-    es_duplicado = c.verificar_duplicado_ventana(normalizado)
-    
-    if es_duplicado:
-        info("🔁 Duplicado en ventana de consolidación - sin registrar nuevo")
-        return False
-    
-    # 3. Solicitar motivo (OBLIGATORIO)
-    td = TermuxAPI()
-    tipo = normalizado.get('tipo', 'gasto')
-    pregunta = "[%s] ¿Cuál fue el motivo de este %s? (app: %s)" % (tipo.upper(), 
-        'gasto' if tipo == 'gasto' else 'ingreso', normalizado.get('origen_paquete', 'app'))
-    resultado = td.mostrar_dialogo(widget="text", titulo="[%s] Motivo" % tipo.upper(), mensaje=pregunta)
-    if resultado and "text" in resultado:
-        motivo_usuario = resultado["text"].strip()
-        normalizado['motivo'] = motivo_usuario if motivo_usuario else None
-    else:
-        normalizado['motivo'] = "Sin motivo especificado"
-    
-    # 4. GPS
-    lat = obtener_gps()
-    
-    # 5. Insertar en SQLite
-    try:
-        ahora = datetime.datetime.now()
-        q = _trimestre(ahora.month)
-        adapter.guardar_transaccion_sql_directo(
-            id_transaccion=normalizado.get('event_id') or os.urandom(12).hex(),
-            fecha_hora_epoch=_time.time(),
-            fecha_iso=ahora.isoformat(),
-            fecha=ahora.strftime('%Y-%m-%d'),
-            hora=ahora.strftime('%H:%M:%S'),
-            trimestre=q, app=normalizado.get('origen_paquete', 'manual'), paquete=normalizado.get('paquete', ''),
-            dispositivo=os.environ.get('ANDROID_ID', 'CLI-Manual'),
-            tipo=normalizado.get('tipo', 'gasto'), medio=normalizado.get('medio', ''),
-            monto_total=normalizado.get('monto', 0.0), moneda=normalizado.get('moneda', 'PEN'),
-            destinatario=normalizado.get('destinatario', 'desconocido'), motivo=normalizado.get('motivo', ''),
-            categoria=normalizado.get('categoria', 'Manual'), es_prestamo=normalizado.get('es_prestamo', 0),
-            monto_pagado=normalizado.get('monto_pagado', 0.0), saldo_pendiente=normalizado.get('saldo_pendiente', 0.0),
-            estado_prestamo=normalizado.get('estado_prestamo', 'activo'), looker=normalizado.get('looker', 0),
-            latitud=lat[0], longitud=lat[1], fuente_gps=lat[2],
-            mensaje_raw=normalizado.get('mensaje_raw', ''), status='consolidado',
-            sincronizado=0, intentos_sync=0, ultimo_error_sync='')
-        info("✅ Transacción registrada: event_id generado en BD")
-        return True
-    except Exception as e:
-        error("❌ Error guardando en BD: " + str(e))
+
+    info("📥 [PIPELINE] Iniciando procesar_notificacion")
+
+    # 0. Inspeccionar estructura exacta de datos_crudos
+    tipo_crudo, claves_crudo, repr_crudo = _resumen_estructura(datos_crudos)
+    info(f"🔎 [0/5] datos_crudos | tipo={tipo_crudo} | claves={claves_crudo}")
+    info(f"📄 [0/5] Contenido exacto datos_crudos:\n{repr_crudo}")
+
+    if not isinstance(datos_crudos, dict):
+        error(f"❌ [0/5] datos_crudos no es un dict (recibido {tipo_crudo}); abortando")
         return False
 
+    # 1. Enrutar adaptador
+    paquete = datos_crudos.get('packageName') or datos_crudos.get('package') or ''
+    info(f"🧭 [1/5] Enrutando adaptador | paquete='{paquete}' | adaptadores_disponibles={list(adaptadores.keys())}")
+
+    adaptador_local = encontrar_adaptador(paquete, adaptadores)
+    if not adaptador_local:
+        warning(f"⚠️ [1/5] Ningún adaptador reconoció el paquete: '{paquete}'")
+        return False
+
+    info(f"✅ [1/5] Adaptador seleccionado: {type(adaptador_local).__name__}")
+
+    # 2. Normalizar
+    try:
+        normalizado = adaptador_local.normalizar_notificacion(datos_crudos)
+    except Exception as e:
+        error(f"❌ [2/5] Error en {type(adaptador_local).__name__}.normalizar_notificacion(): {e}")
+        import traceback
+        error(traceback.format_exc())
+        return False
+
+    tipo_norm, claves_norm, repr_norm = _resumen_estructura(normalizado)
+    info(f"🔄 [2/5] Normalización completada | tipo={tipo_norm} | claves={claves_norm}")
+    info(f"📦 [2/5] Estructura normalizada:\n{repr_norm}")
+
+    if not isinstance(normalizado, dict):
+        error(f"❌ [2/5] normalizar_notificacion no devolvió dict (recibido {tipo_norm})")
+        return False
+
+    # 2B. Validar duplicado (misma tipo NUNCA es duplicado)
+    try:
+        c = Consolidador(ventana_minutos=ventana_minutos)
+        es_duplicado = c.verificar_duplicado_ventana(normalizado)
+        info(f"🔍 [2B/5] Verificación duplicado (ventana={ventana_minutos} min) -> es_duplicado={es_duplicado}")
+    except Exception as e:
+        error(f"❌ [2B/5] Error al verificar duplicado en Consolidador: {e}")
+        import traceback
+        error(traceback.format_exc())
+        return False
+
+    if es_duplicado:
+        info("🔁 [2B/5] Duplicado en ventana de consolidación - sin registrar nuevo")
+        return False
+
+    # 3. Solicitar motivo (OBLIGATORIO)
+    api_dialogo = termux_api if termux_api is not None else TermuxAPI(termux_path=TERMUX_PATH)
+    tipo = normalizado.get('tipo', 'gasto')
+    origen_paq = normalizado.get('origen_paquete', 'app')
+    pregunta = "[%s] ¿Cuál fue el motivo de este %s? (app: %s)" % (
+        str(tipo).upper(),
+        'gasto' if tipo == 'gasto' else 'ingreso',
+        origen_paq
+    )
+    info(f"💬 [3/5] Solicitando motivo vía diálogo Termux | tipo={tipo} | app={origen_paq}")
+
+    try:
+        resultado = api_dialogo.mostrar_dialogo(
+            widget="text",
+            titulo="[%s] Motivo" % str(tipo).upper(),
+            mensaje=pregunta
+        )
+        info(f"💬 [3/5] Respuesta diálogo recibida: {resultado!r}")
+    except Exception as e:
+        warning(f"⚠️ [3/5] Falló mostrar_dialogo ({e}); usando motivo por defecto")
+        resultado = None
+
+    if isinstance(resultado, dict) and "text" in resultado:
+        motivo_usuario = str(resultado["text"]).strip()
+        normalizado['motivo'] = motivo_usuario if motivo_usuario else "Sin motivo especificado"
+    else:
+        normalizado['motivo'] = "Sin motivo especificado"
+
+    info(f"✍️ [3/5] Motivo asignado: '{normalizado['motivo']}'")
+
+    # 4. GPS
+    info("📍 [4/5] Obteniendo ubicación GPS...")
+    lat = obtener_gps()
+    info(f"📍 [4/5] Resultado GPS: lat={lat[0]}, lon={lat[1]}, fuente={lat[2]}")
+
+    # 5. Insertar en SQLite
+    event_id = normalizado.get('event_id') or os.urandom(12).hex()
+    ahora = datetime.datetime.now()
+    q = _trimestre(ahora.month)
+
+    payload_bd = {
+        "id_transaccion": event_id,
+        "fecha_hora_epoch": _time.time(),
+        "fecha_iso": ahora.isoformat(),
+        "fecha": ahora.strftime('%Y-%m-%d'),
+        "hora": ahora.strftime('%H:%M:%S'),
+        "trimestre": q,
+        "app": normalizado.get('origen_paquete', 'manual'),
+        "paquete": normalizado.get('paquete', paquete),
+        "dispositivo": os.environ.get('ANDROID_ID', 'CLI-Manual'),
+        "tipo": normalizado.get('tipo', 'gasto'),
+        "medio": normalizado.get('medio', ''),
+        "monto_total": normalizado.get('monto', 0.0),
+        "moneda": normalizado.get('moneda', 'PEN'),
+        "destinatario": normalizado.get('destinatario', 'desconocido'),
+        "motivo": normalizado.get('motivo', ''),
+        "categoria": normalizado.get('categoria', 'Manual'),
+        "es_prestamo": normalizado.get('es_prestamo', 0),
+        "monto_pagado": normalizado.get('monto_pagado', 0.0),
+        "saldo_pendiente": normalizado.get('saldo_pendiente', 0.0),
+        "estado_prestamo": normalizado.get('estado_prestamo', 'activo'),
+        "looker": normalizado.get('looker', 0),
+        "latitud": lat[0],
+        "longitud": lat[1],
+        "fuente_gps": lat[2],
+        "mensaje_raw": normalizado.get('mensaje_raw', ''),
+        "status": 'consolidado',
+        "sincronizado": 0,
+        "intentos_sync": 0,
+        "ultimo_error_sync": '',
+    }
+
+    info(f"💾 [5/5] Guardando en BD | id={event_id} | tipo={payload_bd['tipo']} | monto={payload_bd['monto_total']} {payload_bd['moneda']} | dest='{payload_bd['destinatario']}'")
+
+    try:
+        adapter.guardar_transaccion_sql_directo(**payload_bd)
+        info(f"✅ [5/5] Transacción registrada en BD | event_id={event_id}")
+        return True
+    except Exception as e:
+        error(f"❌ [5/5] Error guardando en BD (event_id={event_id}): {e}")
+        import traceback
+        error(traceback.format_exc())
+        return False
+    
 # ===================================================================
 # FUNCIÓN: Modo AUTOMATE BROKER (archivo JSON único o directorio)
 # ===================================================================
