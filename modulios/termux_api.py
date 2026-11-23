@@ -15,45 +15,64 @@ from typing import Optional, List, Dict, Any
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 logger = logging.getLogger("TermuxAPI")
 
+# Ruta por defecto de Termux (se sobreescribirá desde main.py si es necesario)
+TERMUX_PATH = "/data/data/com.termux/files/usr/bin"
+
+COMMANDS = {
+    "notification_list": "termux-notification-list",
+    "dialog": "termux-dialog",
+    "location": "termux-location",
+    "notification_remove": "termux-notification-remove",
+}
+
 
 class TermuxAPI:
     """Clase que encapsula los comandos de Termux API."""
 
-    # Comandios disponibles por defecto en Termux
-    COMMANDS = {
-        "notification_list": "termux-notification-list",
-        "dialog": "termux-dialog",
-        "location": "termux-location",
-        "notification_remove": "termux-notification-remove",
-    }
-
-    def __init__(self):
+    def __init__(self, termux_path=None):
+        # Usar la ruta proporcionada o la por defecto
+        self.termux_path = termux_path or TERMUX_PATH
         # Verificar qué comandos están disponibles al iniciar
         self.available_commands = self._check_available_commands()
         logger.info(f"📱 Termux API inicializada - Comandos disponibles: {self.available_commands}")
+
+    def _get_command_path(self, cmd_name):
+        """Obtiene la ruta completa de un comando de Termux."""
+        cmd_name = self.COMMANDS.get(cmd_name)
+        if not cmd_name:
+            return None
+        return os.path.join(self.termux_path, cmd_name)
 
     def _check_available_commands(self) -> Dict[str, bool]:
         """Verifica qué comandos de Termux están disponibles en el sistema."""
         available = {}
         for name, cmd in self.COMMANDS.items():
             try:
-                result = subprocess.run(
-                    ["which", cmd], capture_output=True, text=True, timeout=5
-                )
-                available[name] = result.returncode == 0
-                if available[name]:
-                    logger.info(f"✅ Comando disponible: {cmd}")
+                cmd_path = self._get_command_path(name)
+                if cmd_path:
+                    result = subprocess.run(
+                        [cmd_path, "--version"], capture_output=True, text=True, timeout=5
+                    )
+                    available[name] = result.returncode == 0
                 else:
-                    logger.warning(f"⚠️ Comando no encontrado: {cmd}")
-            except (subprocess.TimeoutExpired, FileNotFoundError):
+                    available[name] = False
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
                 available[name] = False
-                logger.warning(f"⚠️ No se pudo verificar: {cmd}")
+            if available[name]:
+                logger.info(f"✅ Comando disponible: {cmd_name}")
+            else:
+                logger.warning(f"⚠️ Comando no encontrado: {cmd_name}")
         return available
 
-    def _ejecutar_comando(self, comando: str, args: List[str] = None) -> Optional[str]:
+    def _ejecutar_comando(self, comando_nombre: str, args: List[str] = None) -> Optional[str]:
         """Ejecuta un comando de Termux de manera segura."""
         try:
-            full_cmd = [comando]
+            cmd_path = self._get_command_path(comando_nombre)
+            if not cmd_path:
+                logger.error(f"Comando no encontrado en la ruta configurada: {comando_nombre}")
+                return None
+            
+            full_cmd = [cmd_path]
             if args:
                 full_cmd.extend(args)
 
@@ -149,7 +168,7 @@ class TermuxAPI:
         # 1. Intentar GPS en tiempo real
         try:
             result = subprocess.run(
-                ['termux-location', '-g', str(timeout)],
+                [self._get_command_path("location"), "-g", str(timeout)],
                 capture_output=True, text=True, timeout=timeout + 5
             )
 
@@ -169,7 +188,7 @@ class TermuxAPI:
 
         # 2. Fallback: Usar última ubicación guardada en base de datos
         try:
-            db_path = self.db_ruta if hasattr(self, 'db_ruta') else 'local_gastos.db'
+            db_path = 'local_gastos.db'
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
             cursor.execute(
@@ -317,21 +336,28 @@ class TermuxAPI:
         except Exception:
             return "por definir"
 
-    def obtener_gps(self, timeout: int = 10) -> Optional[Dict[str, float]]:
-        """Obtiene ubicación GPS usando termux-location."""
+    def obtener_gps_directo(self, timeout: int = 10) -> Optional[Dict[str, float]]:
+        """Obtiene ubicación GPS usando termux-location con ruta explícita."""
         if not self.available_commands["location"]:
             logger.warning("⚠️ termux-location no disponible")
             return None
 
-        args = ["-g", str(timeout)]  # GPS mode con timeout
-        output = self._ejecutar_comando(self.COMMANDS["location"], args)
+        cmd_path = self._get_command_path("location")
+        if not cmd_path:
+            return None
 
-        if not output:
+        args = ["-g", str(timeout)]  # GPS mode con timeout
+        output = subprocess.run(
+            [cmd_path] + args,
+            capture_output=True, text=True, timeout=timeout + 5
+        )
+
+        if not output or output.returncode != 0:
             return None
 
         try:
             import json
-            ubicacion = json.loads(output)
+            ubicacion = json.loads(output.stdout)
             lat = ubicacion.get("lat")
             lng = ubicacion.get("lon")
 
@@ -362,11 +388,15 @@ class TermuxAPI:
             logger.warning("⚠️ termux-notification-remove no disponible")
             return False
 
-        output = self._ejecutar_comando(
-            self.COMMANDS["notification_remove"],
-            [str(notification_id)]
+        cmd_path = self._get_command_path("notification_remove")
+        if not cmd_path:
+            return False
+
+        output = subprocess.run(
+            [cmd_path, str(notification_id)],
+            capture_output=True, text=True, timeout=5
         )
-        return output is not None
+        return output is not None and output.returncode == 0
 
     def verificar_salud(self) -> Dict[str, bool]:
         """Retorna el estado de salud de todos los comandos Termux."""
@@ -375,11 +405,3 @@ class TermuxAPI:
 
 # Instancia global para fácil acceso
 termux_api = TermuxAPI()
-
-
-if __name__ == "__main__":
-    import sys
-    print(f"📱 Termux API Health Check:")
-    for cmd, disp in termux_api.verificar_salud().items():
-        status = "✅" if disp else "❌"
-        print(f"   {status} {cmd}")

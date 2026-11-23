@@ -27,6 +27,8 @@ MAPEO_ADAPTADORES = CONFIG.get('mapeo_adaptadores', {})
 DIRECTORIO_CONF = CONFIG.get('directorio_archivos_automate', '/sdcard/storage/shared/Documents/noti.json')
 LOG_NIVEL = CONFIG.get('logging', {}).get('nivel', 'INFO')
 LOG_ARCHIVO = CONFIG.get('logging', {}).get('archivo', './logs/app.log')
+# --- NUEVA CONFIGURACIÓN DE TERMUX ---
+TERMUX_PATH = CONFIG.get('termux', {}).get('path', '/data/data/com.termux/files/usr/bin')
 
 # Configurar logger
 logging.basicConfig(level=getattr(logging, LOG_NIVEL, logging.INFO),
@@ -46,12 +48,13 @@ def obtener_adapter():
     return adapter
 
 # ===================================================================
-# FUNCIÓN 2: GPS Termux
+# FUNCIÓN 2: GPS Termux (usa ruta configurada)
 # ===================================================================
 def obtener_gps():
     from modulios.termux_api import TermuxAPI
     try:
-        termux_api = TermuxAPI()
+        # Pasar la ruta de Termux desde config
+        termux_api = TermuxAPI(termux_path=TERMUX_PATH)
         gps_data = termux_api.obtener_gps(timeout=TIEMPO_ESPERA_GPS)
         if gps_data:
             return gps_data.get('latitud'), gps_data.get('longitud'), gps_data.get('fuente_gps', 'live')
@@ -143,6 +146,8 @@ def cmd_insertar(motivo, monto, tipo, destinatario, adapter, adaptadores):
 # FUNCIÓN: Procesar notificación (pipeline automate_broker)
 # ===================================================================
 def procesar_notificacion(datos_crudos, adapter, adaptadores, termux_api, ventana_minutos):
+    from modulios.consolidador import Consolidador
+    
     # 1. Enrutar adaptador
     paquete = datos_crudos.get('packageName', '') or datos_crudos.get('package', '')
     adaptador_local = encontrar_adaptador(paquete, adaptadores)
@@ -191,7 +196,7 @@ def procesar_notificacion(datos_crudos, adapter, adaptadores, termux_api, ventan
             tipo=normalizado.get('tipo', 'gasto'), medio=normalizado.get('medio', ''),
             monto_total=normalizado.get('monto', 0.0), moneda=normalizado.get('moneda', 'PEN'),
             destinatario=normalizado.get('destinatario', 'desconocido'), motivo=normalizado.get('motivo', ''),
-            categoria=normalizado.get('categoria', 'Manual'), es_prestamo=normalizado.get('es_prestamo', 0),
+            categoria=normalized.get('categoria', 'Manual'), es_prestamo=normalizado.get('es_prestamo', 0),
             monto_pagado=normalizado.get('monto_pagado', 0.0), saldo_pendiente=normalizado.get('saldo_pendiente', 0.0),
             estado_prestamo=normalizado.get('estado_prestamo', 'activo'), looker=normalizado.get('looker', 0),
             latitud=lat[0], longitud=lat[1], fuente_gps=lat[2],
@@ -204,13 +209,12 @@ def procesar_notificacion(datos_crudos, adapter, adaptadores, termux_api, ventan
         return False
 
 # ===================================================================
-# FUNCIÓN: Modo AUTOMATE BROKER (FIXED - usa el argumento --directorio)
+# FUNCIÓN: Modo AUTOMATE BROKER (FIFO)
 # ===================================================================
-def modo_automate_broker(directorio_override=None):
+def modo_automate_broker(adapter, adaptadores, directorio_override=None):
     """
     Modo automate_broker: Automate deja archivo .json en directorio configurado.
     Procesa cada archivo por el pipeline: adaptador → consolidar → motivo → GPS → SQLite.
-    El directorio puede venir por config.yaml o por argumento --directorio.
     """
     # Usar el directoriooverride si se proporcionó, sino el de config.yaml
     directorio = directorio_override if directorio_override else DIRECTORIO_CONF
@@ -231,7 +235,7 @@ def modo_automate_broker(directorio_override=None):
         return
     
     consolidador = Consolidador(ventana_minutos=VENTANA_CONSOLIDACION)
-    termux_api = TermuxAPI()
+    termux_api = TermuxAPI(termux_path=TERMUX_PATH)
     
     for archivo in sorted(archivos):
         ruta = os.path.join(directorio, archivo)
@@ -272,7 +276,7 @@ def main():
     parser.add_argument("--tipo", type=str, default="gasto", help="Tipo (gasto/ingreso)")
     parser.add_argument("--destinatario", type=str, default="", help="Destinatario")
     parser.add_argument("--directorio", type=str, default="",
-                        help="Directorio override para automate_broker (sobreescribe config.yaml)")
+                        help="Directorio override para automate_broker")
     args = parser.parse_args()
     
     # Inicializaciones (siempre, aunque no se muestre nada)
@@ -285,8 +289,8 @@ def main():
     elif args.accion == "insertar":
         cmd_insertar(args.motivo, args.monto, args.tipo, args.destinatario, adapter, adaptadores)
     elif args.accion == "automate_broker":
-        # Pasar el directorio override si se proporcionó, sino el de config
-        modo_automate_broker(args.directorio)
+        # Pasar adapter y adaptadores al modo broker
+        modo_automate_broker(adapter, adaptadores, args.directorio)
     elif args.accion == "listener_directo":
         modo_listener_directo()
 
