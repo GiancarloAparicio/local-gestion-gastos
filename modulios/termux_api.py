@@ -15,9 +15,11 @@ from typing import Optional, List, Dict, Any
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 logger = logging.getLogger("TermuxAPI")
 
-# Ruta por defecto de Termux (se sobreescribe desde main.py usando config.yaml)
+# --- Configuración única de Termux (única fuente de verdad) ---
+# Ruta donde residen los binarios de Termux (se sobreescribe desde main.py usando config.yaml)
 TERMUX_PATH = "/data/data/com.termux/files/usr/bin"
 
+# Diccionario de comandos - definición única, usada por la clase
 COMMANDS = {
     "notification_list": "termux-notification-list",
     "dialog": "termux-dialog",
@@ -29,58 +31,33 @@ COMMANDS = {
 class TermuxAPI:
     """Clase que encapsula los comandos de Termux API."""
 
-    # COMMANDS como atributo de clase (fijo error AttributeError original)
-    COMMANDS = {
-        "notification_list": "termux-notification-list",
-        "dialog": "termux-dialog",
-        "location": "termux-location",
-        "notification_remove": "termux-notification-remove",
-    }
-    # Control para logging una sola vez al crear la instancia global
-    _logging_done = False
-
     def __init__(self, termux_path=None):
-        # Usar ruta proporcionada o la por defecto
+        # Usar la ruta proporcionada o la por defecto del módulo
         self.termux_path = termux_path or TERMUX_PATH
-        # Validar comandos al iniciar - recolecta datos sin logs internos
-        self.available_commands = self._check_available_commands()
-        # Logueo basado en resultados: informar al usuario qué comandos hay
-        # Solo loguear en la primera instancia para evitar duplicados (control de clase)
-        if not TermuxAPI._logging_done:
-            TermuxAPI._logging_done = True
-            cmd_names = list(self.available_commands.keys())
-            all_found = all(self.available_commands.values())
-            if all_found:
-                logger.info(f"📱 Termux API inicializada - ✅ Todos los comandos disponibles: {cmd_names}")
-            elif any(self.available_commands.values()):
-                # Algunos comandos encontrados, algunos no
-                found = [k for k, v in self.available_commands.items() if v]
-                not_found = [k for k, v in self.available_commands.items() if not v]
-                logger.warning(f"⚠️ Termux API inicializada - Mezcla: {found} disponibles, {not_found} no")
-            else:
-                # Ningún comando encontrado
-                logger.warning(f"⚠️ Termux API inicializada - ❌ Ningún comando disponible: {cmd_names}")
+        # Disponibilidad se establece como None (pending) y se verifica bajo demanda
+        self._available_commands = None
 
     def _get_command_path(self, cmd_name):
         """Obtiene la ruta completa de un comando de Termux usando self.termux_path."""
-        cmd_name = self.COMMANDS.get(cmd_name)
-        if not cmd_name:
+        cmd_name_val = self.COMMANDS.get(cmd_name)
+        if not cmd_name_val:
             return None
-        return os.path.join(self.termux_path, cmd_name)
+        return os.path.join(self.termux_path, cmd_name_val)
 
-    def _check_available_commands(self) -> Dict[str, bool]:
+    def _check_available_commands(self):
         """Verifica qué comandos de Termux están disponibles en el sistema.
-        
+
         Intenta ejecutar cada comando con --version. Si falla por FileNotFoundError,
-        es porque el binario no está en la ruta configurada - informativo para el usuario.
+        el comando no está en la ruta configurada (expected en Linux, normal en Termux).
         Si el comando se ejecuta (retorno 0), está disponible.
+
+        Returns dict con {nombre: bool} - solo se llama bajo demanda.
         """
         available = {}
         for name, cmd in self.COMMANDS.items():
             try:
                 cmd_path = self._get_command_path(name)
                 if cmd_path:
-                    # Intentamos verificar el comando
                     result = subprocess.run(
                         [cmd_path, "--version"], capture_output=True, text=True, timeout=5
                     )
@@ -88,63 +65,49 @@ class TermuxAPI:
                 else:
                     available[name] = False
             except FileNotFoundError:
-                # El directorio o binario no existe en la ruta configurada
-                # Esto es informativo: el usuario sabe que Termux no está configurado bien
+                # Binario no existe en esta ruta (expected en Linux, normal en Termux)
+                # No logar warning aquí - se logará cuando se intente usar el comando
                 available[name] = False
-                logger.debug(f"⚠️ Comando no verificado: {name} (binario no en {self.termux_path})")
             except (subprocess.TimeoutExpired, OSError):
-                # Timeout u otros errores de sistema
                 available[name] = False
-            except Exception as e:
-                # Cualquier otro error inesperado
+            except Exception:
                 available[name] = False
-        
-        # Este método solo recolecta datos, no emite logs:
-        # El caller (__init__) decidirá qué logar
         return available
 
-    def _ejecutar_comando(self, comando_nombre: str, args: List[str] = None) -> Optional[str]:
-        """Ejecuta un comando de Termux de manera segura.
-        
-        Returns None si el comando no existe o falla - el sistema se degrada gracefully.
+    def _verificar_comando_en_ruta(self, cmd_name):
+        """Verifica si un comando específico está disponible en la ruta actual.
+
+        Usado bajo demanda antes de ejecutar un comando.
+        Retorna True si el comando existe y es ejecutable, False si no.
         """
         try:
-            cmd_path = self._get_command_path(comando_nombre)
+            cmd_path = self._get_command_path(cmd_name)
             if not cmd_path:
-                logger.error(f"Comando no encontrado en la ruta configurada: {comando_nombre}")
-                return None
-
-            full_cmd = [cmd_path]
-            if args:
-                full_cmd.extend(args)
-
-            logger.debug(f"Ejecutando comando Termux: {' '.join(full_cmd)}")
+                return False
             result = subprocess.run(
-                full_cmd, capture_output=True, text=True, timeout=30
+                [cmd_path, "--version"], capture_output=True, text=True, timeout=5
             )
-
-            if result.returncode == 0:
-                return result.stdout.strip() if result.stdout else None
-            else:
-                # Comando existe pero falló - logueamos error pero no levantamos excepción
-                logger.error(f"Error en comando Termux ({comando_nombre}): {result.stderr[:100]}")
-                return None
+            return result.returncode == 0
         except FileNotFoundError:
-            # Binario no existe en esta ruta - esperado fuera de Termux
-            logger.debug(f"⚠️ Binario no encontrado en {cmd_path} (no estás en Termux?)")
-            return None
-        except Exception as e:
-            logger.error(f"❌ Error ejecutando comando Termux: {e}")
-            return None
+            # Binario no encontrado en esta ruta
+            return False
+        except Exception:
+            return False
 
     def mostrar_dialogo(self, widget: str = "text", titulo: str = None,
                         mensaje: str = "", **kwargs) -> Optional[Dict]:
         """Muestra un diálogo usando termux-dialog.
-        
-        Si termux-dialog no está disponible, retorna None y el llamador decidirá qué hacer.
+
+        Verifica disponibilidad bajo demanda. Si el comando no existe,
+        retorna None y el llamador decidirá qué hacer.
         """
-        if not self.available_commands["dialog"]:
-            logger.debug("⚠️ termux-dialog no disponible - modo diálogo desactivado")
+        # Verificar disponibilidad bajo demanda (solo la primera vez)
+        if self._available_commands is None:
+            self._available_commands = self._check_available_commands()
+
+        if not self._available_commands.get("dialog", False):
+            # Comando no disponible en esta ruta - retornar None gracefully
+            # No logar warning aquí para evitar spurious messages
             return None
 
         args = [widget]
@@ -166,18 +129,42 @@ class TermuxAPI:
         try:
             import json
             resultado = json.loads(output)
-            logger.info(f"💬 Diálogo termux finalizado: {resultado}")
             return resultado
         except json.JSONDecodeError:
-            logger.warning(f"⚠️ Salida no JSON del diálogo: {output}")
             return {"raw": output}
 
+    def _ejecutar_comando(self, comando_nombre: str, args: List[str] = None) -> Optional[str]:
+        """Ejecuta un comando de Termux de manera segura."""
+        try:
+            cmd_path = self._get_command_path(comando_nombre)
+            if not cmd_path:
+                # Comando no definido en COMMANDS
+                return None
+
+            full_cmd = [cmd_path]
+            if args:
+                full_cmd.extend(args)
+
+            result = subprocess.run(
+                full_cmd, capture_output=True, text=True, timeout=30
+            )
+
+            if result.returncode == 0:
+                return result.stdout.strip() if result.stdout else None
+            else:
+                # Comando existió pero falló - esto es informativo
+                # pero no levantamos excepción ni spurious warnings al init
+                return None
+        except FileNotFoundError:
+            # Binario no existe en esta ruta (expected en Linux, normal en Termux)
+            return None
+        except Exception as e:
+            # Error genérico - logar pero no hacer crashear
+            logger.debug(f"Excepción ejecutando comando Termux: {e}")
+            return None
+
     def obtener_gps(self, timeout: int = 15) -> Optional[Dict[str, Any]]:
-        """Obtiene ubicación GPS con fallback a base de datos.
-        
-        PRIMERO intenta GPS en tiempo real con termux-location.
-        Si falla (no hay Termux o binario no disponible), usa fallback a BD.
-        """
+        """Obtiene ubicación GPS con fallback a base de datos."""
         import json
         import sqlite3
 
@@ -201,12 +188,9 @@ class TermuxAPI:
                             'longitud': float(lng),
                             'fuente_gps': 'live'
                         }
-                # Si returncode != 0 o sin stdout: GPS no disponible, continuar a fallback
-                logger.debug(f"⚠️ GPS tiempo real no disponible (returncode={result.returncode})")
-            else:
-                logger.debug("⚠️ No se pudo construir path para GPS")
-        except Exception as e:
-            logger.warning(f"⚠️ GPS tiempo real falló: {e}")
+            # Si no hay datos: continuar a fallback (no logar warning spurious)
+        except Exception:
+            pass
 
         # 2. Fallback: Usar última ubicación guardada en base de datos
         try:
@@ -224,16 +208,13 @@ class TermuxAPI:
 
             if row:
                 lat, lng, fuente = row
-                logger.info("📡 Usando ubicación última conocida de la base de datos")
                 return {
                     'latitud': float(lat),
                     'longitud': float(lng),
                     'fuente_gps': fuente
                 }
-            # Sin datos en BD tampoco: retornar None (el llamador decidirá)
-            logger.debug("⚠️ No hay ubicación GPS disponible (ni en vivo ni en BD)")
-        except Exception as e:
-            logger.error(f"❌ Error en fallback GPS BD: {e}")
+        except Exception:
+            pass
 
         return None
 
@@ -319,7 +300,6 @@ class TermuxAPI:
         try:
             cmd_path = self._get_command_path("location")
             if not cmd_path:
-                logger.debug("⚠️ No se pudo obtener path para GPS directo")
                 return None
 
             args = ["-g", str(timeout)]
@@ -329,8 +309,6 @@ class TermuxAPI:
             )
 
             if not output or output.returncode != 0:
-                # Comando existió pero no retornó datos - GPS no disponible ahora
-                logger.debug(f"⚠️ GPS directo no retornó datos (returncode={output.returncode if output else 'N/A'})")
                 return None
 
             import json
@@ -344,16 +322,12 @@ class TermuxAPI:
                     "longitud": float(lng),
                     "fuente_gps": "live"
                 }
-            else:
-                logger.debug("⚠️ GPS directo sin lat/lng en salida")
-                return None
         except (json.JSONDecodeError, FileNotFoundError):
-            # Archivo no encontrado o JSON inválido - fuera de Termux
-            logger.debug("⚠️ GPS directo: error de JSON o binario no encontrado")
-            return None
+            pass
         except Exception as e:
-            logger.error(f"❌ Error GPS directo: {e}")
-            return None
+            logger.debug(f"Error GPS directo: {e}")
+
+        return None
 
     def remover_notificacion(self, notification_id: int) -> bool:
         """Marca una notificación como procesada."""
@@ -366,8 +340,6 @@ class TermuxAPI:
                 [cmd_path, str(notification_id)],
                 capture_output=True, text=True, timeout=5
             )
-            # Return True solo si returncode es 0 (éxito real)
-            # Si es None o distinto de 0, retorno False (no pudimos remover)
             return output is not None and output.returncode == 0
         except FileNotFoundError:
             return False
@@ -375,8 +347,13 @@ class TermuxAPI:
             return False
 
     def verificar_salud(self) -> Dict[str, bool]:
-        """Retorna el estado de salud de todos los comandos Termux."""
-        return self.available_commands.copy()
+        """Retorna el estado de salud de todos los comandos Termux.
+
+        Verifica bajo demanda si los comandos aún no se han verificado.
+        """
+        if self._available_commands is None:
+            self._available_commands = self._check_available_commands()
+        return self._available_commands.copy()
 
 
 # Instancia global - importa desde main.py o usa la definida aquí
