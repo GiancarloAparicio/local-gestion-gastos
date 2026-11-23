@@ -110,9 +110,9 @@ def cmd_listar(adapter):
             monto = row.get('monto_total', 0) if row else 0
             destinatario = row.get('destinatario', 'N/A') if row else 'N/A'
             motivo = row.get('motivo', '')[:20] if row and row.get('motivo') else 'SIN MOTIVO'
-            print(f"  {i}. Monto: S/ {monto:.2f} | Destinatario: {destinatario} | Motivo: {motivo}")
+            print(\1, flush=True)
     except Exception as e:
-        print(f"❌ Error al listar: {e}", file=sys.stderr)
+        print(\1, flush=True)
 
 # ===================================================================
 # FUNCIÓN: Comando INSERTAR
@@ -138,9 +138,9 @@ def cmd_insertar(motivo, monto, tipo, destinatario, adapter, adaptadores):
             estado_prestamo='activo', looker=0, latitud=None, longitud=None,
             fuente_gps='none', mensaje_raw=f'{motivo} - S/ {monto}',
             status='pendiente', sincronizado=0, intentos_sync=0, ultimo_error_sync='')
-        print(f"✅ Transacción registrada: event_id generado en BD")
+        print(\1, flush=True)
     except Exception as e:
-        print(f"❌ Error al insertar: {e}", file=sys.stderr)
+        print(\1, flush=True)
 
 # ===================================================================
 # FUNCIÓN: Procesar notificación (pipeline automate_broker)

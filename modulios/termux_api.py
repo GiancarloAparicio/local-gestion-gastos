@@ -31,6 +31,14 @@ COMMANDS = {
 class TermuxAPI:
     """Clase que encapsula los comandos de Termux API."""
 
+    # COMMANDS como atributo de clase (fijo error AttributeError original)
+    COMMANDS = {
+        "notification_list": "termux-notification-list",
+        "dialog": "termux-dialog",
+        "location": "termux-location",
+        "notification_remove": "termux-notification-remove",
+    }
+
     def __init__(self, termux_path=None):
         # Usar la ruta proporcionada o la por defecto del módulo
         self.termux_path = termux_path or TERMUX_PATH
