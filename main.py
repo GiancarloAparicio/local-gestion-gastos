@@ -73,7 +73,18 @@ def _trimestre(mes):
 
 # ===================================================================
 # FUNCIÓN: Cargar adaptadores dinámicamente
+# Intenta varios nombres de clase para compatibilidad con convenios variados
 # ===================================================================
+def _nombre_clase_adaptador(clave):
+    """Genera variaciones posibles de nombre de clase para un clave dada."""
+    base = clave.capitalize()
+    variantes = [
+        base + "Adapter",       # e.g. "NfcAdapter"
+        clave.upper() + "Adapter",  # e.g. "NFCAdapter"
+        clave + "Adapter",      # e.g. "nfcAdapter" (aunque es raro)
+    ]
+    return variantes
+
 def cargar_adaptadores():
     MODULOS = {
         "ibk": "adaptadores.ibk", 
@@ -87,7 +98,20 @@ def cargar_adaptadores():
     for clave, mod in MODULOS.items():
         try:
             md = importlib.import_module(mod)
-            adaptadores[clave] = getattr(md, clave.capitalize() + "Adapter")
+            # Probar variaciones de nombre de clase
+            cls_nombre = None
+            for variante in _nombre_clase_adaptador(clave):
+                if hasattr(md, variante):
+                    cls_nombre = variante
+                    break
+            if cls_nombre is None:
+                # Último recurso: usar el primer atributo que termine en Adapter
+                for attr in dir(md):
+                    if attr.endswith("Adapter"):
+                        cls_nombre = attr
+                        break
+            if cls_nombre:
+                adaptadores[clave] = getattr(md, cls_nombre)
         except Exception:
             pass
     # Filtrar solo los activos en config
@@ -95,8 +119,17 @@ def cargar_adaptadores():
 
 # ===================================================================
 # FUNCIÓN: Encontrar adaptador por paquete
+# Usa primero el mapeo de config, luego fallback a substring match
 # ===================================================================
-def encontrar_adaptador(paquete, adaptadores):
+def encontrar_adaptador(paquete, adaptadores, mapeo=None):
+    if mapeo is None:
+        mapeo = MAPEO_ADAPTADORES  # desde config.yaml global
+    # 1. Intentar matching por mapeo de paquetes (config.yaml)
+    if paquete and paquete in mapeo:
+        clave = mapeo[paquete]
+        if clave in adaptadores:
+            return adaptadores[clave]()
+    # 2. Fallback: substring match simple (paquete contiene clave)
     for clave, cls in adaptadores.items():
         if paquete and clave in paquete:
             return cls()
