@@ -32,7 +32,7 @@ mapeo_adaptadores:
   com.bcp.innovacxion.yapeapp: "yape"
 
 # --- Directorio de Archivos Automate ---
-directorio_archivos_automate: "/sdcard/storage/shared/Documents/noti.json"
+directorio_archivos_automate: "/data/data/com.termux/files/home/storage/shared/Documents/noti.json"
 
 # --- Configuración de Registro ---
 # --- Configuración de Termux ---

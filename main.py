@@ -198,7 +198,7 @@ def procesar_notificacion(datos_crudos, adapter, adaptadores, termux_api, ventan
             destinatario=normalizado.get('destinatario', 'desconocido'), motivo=normalizado.get('motivo', ''),
             categoria=normalized.get('categoria', 'Manual'), es_prestamo=normalizado.get('es_prestamo', 0),
             monto_pagado=normalizado.get('monto_pagado', 0.0), saldo_pendiente=normalizado.get('saldo_pendiente', 0.0),
-            estado_prestamo=normalizado.get('estado_prestamo', 'activo'), looker=normalizado.get('looker', 0),
+            estado_prestamo=normalizado.get('estado_prestamo', 'activo'), looker=normalized.get('looker', 0),
             latitud=lat[0], longitud=lat[1], fuente_gps=lat[2],
             mensaje_raw=normalizado.get('mensaje_raw', ''), status='consolidado',
             sincronizado=0, intentos_sync=0, ultimo_error_sync='')
@@ -209,32 +209,58 @@ def procesar_notificacion(datos_crudos, adapter, adaptadores, termux_api, ventan
         return False
 
 # ===================================================================
-# FUNCIÓN: Modo AUTOMATE BROKER (FIFO)
+# FUNCIÓN: Modo AUTOMATE BROKER (archivo JSON único o directorio)
 # ===================================================================
-def modo_automate_broker(adapter, adaptadores, directorio_override=None):
+def modo_automate_broker(adapter, adaptadores, archivo_json=None):
     """
-    Modo automate_broker: Automate deja archivo .json en directorio configurado.
-    Procesa cada archivo por el pipeline: adaptador → consolidar → motivo → GPS → SQLite.
+    Modo automate_broker: Automate deja un archivo .json con notificación para procesar.
+    
+    Si se proporciona un archivo JSON, lo procesa directamente.
+    Si se proporciona un directorio, procesa todos los archivos .json del directorio (modo legacy).
+    Si no se proporciona nada, usa el archivo por defecto desde config.yaml.
     """
-    # Usar el directoriooverride si se proporcionó, sino el de config.yaml
-    directorio = directorio_override if directorio_override else DIRECTORIO_CONF
+    # Determinar qué archivo/directorio procesar
+    # Prioridad: --archivo-json > --directorio (legacy) > config.yaml default
+    if archivo_json is None:
+        archivo_json = DIRECTORIO_CONF
     
-    # Si el directorio es un archivo (como en config.yaml), obtener su directorio padre
-    if os.path.isfile(directorio):
-        directorio = os.path.dirname(directorio)
+    # Modo: procesar un archivo JSON específico
+    if not os.path.isdir(archivo_json) and os.path.isfile(archivo_json):
+        info("▶ Modo automate_broker: procesando archivo " + archivo_json)
+        
+        if not os.path.isfile(archivo_json):
+            error("Archivo no encontrado: " + archivo_json)
+            return
+        
+        try:
+            with open(archivo_json, 'r', encoding='utf-8') as f:
+                datos_crudos = json.load(f)
+        except Exception as e:
+            error("❌ Leyendo " + archivo_json + ": " + str(e))
+            return
+        
+        procesar_notificacion(datos_crudos, adapter, adaptadores, TermuxAPI(termux_path=TERMUX_PATH), VENTANA_CONSOLIDACION)
+        
+        # Opcional: remover el archivo después de procesarlo
+        try:
+            os.remove(archivo_json)
+        except Exception:
+            pass
+        return
     
-    info("▶ Modo automate_broker: procesando " + directorio)
-    
+    # Modo: directorio (legacy) - procesar todos los archivos .json
+    directorio = archivo_json
     if not os.path.isdir(directorio):
         warning("Directorio no existe: " + directorio)
         return
+    
+    info("▶ Modo automate_broker: procesando directorio " + directorio)
     
     archivos = [f for f in os.listdir(directorio) if f.endswith('.json')]
     if not archivos:
         info("📭 No hay archivos nuevos")
         return
     
-    consolidador = Consolidador(ventana_minutos=VENTANA_CONSOLIDACION)
     termux_api = TermuxAPI(termux_path=TERMUX_PATH)
     
     for archivo in sorted(archivos):
@@ -242,56 +268,11 @@ def modo_automate_broker(adapter, adaptadores, directorio_override=None):
         try:
             with open(ruta, 'r', encoding='utf-8') as f:
                 datos_crudos = json.load(f)
+            procesar_notificacion(datos_crudos, adapter, adaptadores, TermuxAPI(termux_path=TERMUX_PATH), VENTANA_CONSOLIDACION)
+            # Intentar remover el archivo, pero no fallar si no se puede
+            try:
+                os.remove(ruta)
+            except Exception:
+                pass
         except Exception as e:
-            error("❌ Leyendo " + archivo + ": " + str(e))
-            continue
-        
-        procesar_notificacion(datos_crudos, adapter, adaptadores, termux_api, VENTANA_CONSOLIDACION)
-        try:
-            os.remove(ruta)
-        except Exception:
-            pass
-
-# ===================================================================
-# FUNCIÓN: Modo LISTENER DIRECTO
-# ===================================================================
-def modo_listener_directo():
-    info("🎧 Modo listener_directo configurado:")
-    info("   Modo operacional: " + MODO_OPERACION)
-    info("   Adaptadores: " + ", ".join(ADAPTADORES_ACTIVOS))
-    info("   Ventana consolidación: " + str(VENTANA_CONSOLIDACION) + " min")
-    info("   GPS espera: " + str(TIEMPO_ESPERA_GPS) + "s")
-    info("   Dialogo espera: " + str(TIEMPO_ESPERA_DIALOGO) + "s")
-    info("   Próximo paso: bucle while True + capturar nativa")
-
-# ===================================================================
-# FUNCIÓN: PUNTO DE ENTRADA
-# ===================================================================
-def main():
-    parser = argparse.ArgumentParser(description="Sistema local-gestion-gastos", add_help=False)
-    parser.add_argument("--accion", choices=["listar", "insertar", "automate_broker", "listener_directo"],
-                        default="listar", help="Acción")
-    parser.add_argument("--motivo", type=str, default="", help="Motivo")
-    parser.add_argument("--monto", type=float, default=0.0, help="Monto")
-    parser.add_argument("--tipo", type=str, default="gasto", help="Tipo (gasto/ingreso)")
-    parser.add_argument("--destinatario", type=str, default="", help="Destinatario")
-    parser.add_argument("--directorio", type=str, default="",
-                        help="Directorio override para automate_broker")
-    args = parser.parse_args()
-    
-    # Inicializaciones (siempre, aunque no se muestre nada)
-    adapter = obtener_adapter()
-    adaptadores = cargar_adaptadores()
-    lat = obtener_gps()
-    
-    if args.accion == "listar":
-        cmd_listar(adapter)
-    elif args.accion == "insertar":
-        cmd_insertar(args.motivo, args.monto, args.tipo, args.destinatario, adapter, adaptadores)
-    elif args.accion == "automate_broker":
-        # Pasar adapter y adaptadores al modo broker
-        modo_automate_broker(adapter, adaptadores, args.directorio)
-    elif args.accion == "listener_directo":
-        modo_listener_directo()
-
-if __name__ == "__main__": main()
+            error("❌ Error procesando " + archivo + ": " + str(e))
