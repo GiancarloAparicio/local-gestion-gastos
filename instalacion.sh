@@ -119,3 +119,62 @@ echo "Entorno virtual: $PROJECT_DIR/.venv"
 echo "Para activar: source $PROJECT_DIR/.venv/bin/activate"
 echo "Para usar: source \$HOME/.bashrc && python3"
 echo "============================================================"
+# 5. Crear base de datos y tablas SQLite
+echo "[5/7] Creando base de datos y tablas SQLite..."
+sqlite3 "$PROJECT_DIR/local_gastos.db" << 'SQL_SCRIPT'
+CREATE TABLE IF NOT EXISTS transacciones (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_transaccion TEXT UNIQUE,
+    fecha_hora_epoch REAL,
+    fecha_iso TEXT,
+    fecha TEXT,
+    hora TEXT,
+    trimestre TEXT,
+    app TEXT,
+    paquete TEXT,
+    dispositivo TEXT,
+    tipo TEXT,
+    medio TEXT,
+    monto_total REAL,
+    moneda TEXT,
+    destinatario TEXT,
+    motivo TEXT,
+    categoria TEXT,
+    es_prestamo INTEGER,
+    monto_pagado REAL,
+    saldo_pendiente REAL,
+    estado_prestamo TEXT,
+    looker INTEGER,
+    latitud REAL,
+    longitud REAL,
+    fuente_gps TEXT,
+    mensaje_raw TEXT,
+    status TEXT,
+    sincronizado INTEGER,
+    intentos_sync INTEGER,
+    ultimo_error_sync TEXT
+);
+
+CREATE TABLE IF NOT EXISTS notificaciones_crudas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recibido_en REAL,
+    paquete TEXT,
+    app TEXT,
+    dispositivo TEXT,
+    titulo TEXT,
+    cuerpo TEXT,
+    id_transaccion_vinculada TEXT,
+    resultado_proceso TEXT
+);
+
+CREATE TABLE IF NOT EXISTS abonos_prestamo (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_transaccion_prestamo TEXT,
+    id_transaccion_ingreso TEXT,
+    fecha_abono TEXT,
+    monto_abono REAL,
+    saldo_restante REAL,
+    nota TEXT
+);
+SQL_SCRIPT
+echo "✅ Base de datos y tablas creadas"

@@ -15,6 +15,48 @@ def log_info(mensaje):
     except Exception as e:
         print(f"ERROR de logging: {e}")
 
+def _crear_tabla_si_no_existe():
+    """Crea la tabla transacciones si no existe, con la estructura completa."""
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'local_gastos.db')
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS transacciones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_transaccion TEXT UNIQUE,
+            fecha_hora_epoch REAL,
+            fecha_iso TEXT,
+            fecha TEXT,
+            hora TEXT,
+            trimestre TEXT,
+            app TEXT,
+            paquete TEXT,
+            dispositivo TEXT,
+            tipo TEXT,
+            medio TEXT,
+            monto_total REAL,
+            moneda TEXT,
+            destinatario TEXT,
+            motivo TEXT,
+            categoria TEXT,
+            es_prestamo INTEGER,
+            monto_pagado REAL,
+            saldo_pendiente REAL,
+            estado_prestamo TEXT,
+            looker INTEGER,
+            latitud REAL,
+            longitud REAL,
+            fuente_gps TEXT,
+            mensaje_raw TEXT,
+            status TEXT,
+            sincronizado INTEGER,
+            intentos_sync INTEGER,
+            ultimo_error_sync TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
 def get_db():
     db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'local_gastos.db')
     conn = sqlite3.connect(db_path)
@@ -66,6 +108,7 @@ def main():
     print("=" * 50)
     print("SISTEMA LOCAL-GESTION-GASTOS")
     print("=" * 50)
+    _crear_tabla_si_no_existe()
     conn = sqlite3.connect(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'local_gastos.db'))
     cursor = conn.cursor()
     cursor.execute('SELECT COUNT(*) FROM transacciones')
