@@ -29,6 +29,14 @@ COMMANDS = {
 class TermuxAPI:
     """Clase que encapsula los comandos de Termux API."""
 
+    # COMMANDS es un atributo de clase compartido por todas las instancias
+    COMMANDS = {
+        "notification_list": "termux-notification-list",
+        "dialog": "termux-dialog",
+        "location": "termux-location",
+        "notification_remove": "termux-notification-remove",
+    }
+
     def __init__(self, termux_path=None):
         # Usar la ruta proporcionada o la por defecto
         self.termux_path = termux_path or TERMUX_PATH
@@ -59,9 +67,9 @@ class TermuxAPI:
             except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
                 available[name] = False
             if available[name]:
-                logger.info(f"✅ Comando disponible: {cmd_name}")
+                logger.info(f"✅ Comando disponible: {name}")
             else:
-                logger.warning(f"⚠️ Comando no encontrado: {cmd_name}")
+                logger.warning(f"⚠️ Comando no encontrado: {name}")
         return available
 
     def _ejecutar_comando(self, comando_nombre: str, args: List[str] = None) -> Optional[str]:
@@ -256,6 +264,7 @@ class TermuxAPI:
         except Exception:
             return "Sin motivo especificado"
 
+
     def solicitar_monto_contexto(self, es_gasto: bool, app_nombre: str = "") -> Optional[Dict]:
         """Solicita el monto al usuario con contexto sobre si es gasto o ingreso.
         
@@ -305,6 +314,7 @@ class TermuxAPI:
         except Exception:
             return None
 
+
     def solicitar_destinatario_contexto(self, es_gasto: bool, app_nombre: str = "") -> str:
         """Solicita el destinatario con contexto del tipo de movimiento.
         
@@ -335,6 +345,7 @@ class TermuxAPI:
             return "por definir"
         except Exception:
             return "por definir"
+
 
     def obtener_gps_directo(self, timeout: int = 10) -> Optional[Dict[str, float]]:
         """Obtiene ubicación GPS usando termux-location con ruta explícita."""

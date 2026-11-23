@@ -35,6 +35,11 @@ mapeo_adaptadores:
 directorio_archivos_automate: "/sdcard/storage/shared/Documents/noti.json"
 
 # --- Configuración de Registro ---
+# --- Configuración de Termux ---
+# Ruta donde residen los binarios de Termux (en Termux real: /data/data/com.termux/files/usr/bin)
+termux:
+  path: "/data/data/com.termux/files/usr/bin"
+
 logging:
   nivel: "INFO"
   archivo: "./logs/app.log"
