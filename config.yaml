@@ -25,11 +25,19 @@ procesamiento:
 adaptadores_activos:
   - "yape"
   - "ibk"
+  - "bbva"
+  - "nfc"
+  - "compartamos"
+  - "manual"
 
 # --- Mapeo de Paquetes a Adaptadores ---
 mapeo_adaptadores:
   pe.com.interbank.mobilebanking: "ibk"
   com.bcp.innovacxion.yapeapp: "yape"
+  pe.com.compartamos.bancamovil: "compartamos"
+  com.google.android.apps.walletnfcrel: "nfc"
+  manual: "manual"
+  
 
 # --- Directorio de Archivos Automate ---
 directorio_archivos_automate: "/data/data/com.termux/files/home/storage/shared/Documents/noti.json"

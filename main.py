@@ -75,10 +75,12 @@ def _trimestre(mes):
 # ===================================================================
 def cargar_adaptadores():
     MODULOS = {
-        "ibk": "adaptadores.ibk", "yape": "adaptadores.yape",
-        "bbva": "adaptadores.bbva", "nfc": "adaptadores.nfc",
-        "manual": "adaptadores.manual", "compartamos": "adaptadores.compartamos",
-        "plin": "adaptadores.plin",
+        "ibk": "adaptadores.ibk", 
+        "yape": "adaptadores.yape",
+        "bbva": "adaptadores.bbva", 
+        "nfc": "adaptadores.nfc",
+        "manual": "adaptadores.manual", 
+        "compartamos": "adaptadores.compartamos"
     }
     adaptadores = {}
     for clave, mod in MODULOS.items():
