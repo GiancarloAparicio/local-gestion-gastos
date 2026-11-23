@@ -1,122 +1,290 @@
-import os
-import argparse
-import sqlite3
+#!/usr/bin/env python3
+"""Sistema local-gestion-gastos - main.py modular, leyendo config.yaml."""
 
-from modulios.logger import info, warning, error, setup_logger
+import os, sys, argparse, json, datetime, time as _time, logging, importlib, yaml
+from adaptadores.infraestructura.sqlite_adapter import SQLiteAdapter
+from modulios.logger import info, warning, error
+from modulios.termux_api import TermuxAPI
 
-# Configuración inicial - el logger ya está configurado en modulios.logger
-# usando la ruta de archivo desde config.yaml (./logs/app.log)
+# ===================================================================
+# CONFIGURACIÓN CENTRAL (leída de config.yaml)
+# ===================================================================
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.yaml')
+with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+    CONFIG = yaml.safe_load(f)
 
-def _crear_tabla_si_no_existe():
-    """Crea la tabla transacciones si no existe, con la estructura completa."""
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'local_gastos.db')
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS transacciones (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_transaccion TEXT UNIQUE,
-            fecha_hora_epoch REAL,
-            fecha_iso TEXT,
-            fecha TEXT,
-            hora TEXT,
-            trimestre TEXT,
-            app TEXT,
-            paquete TEXT,
-            dispositivo TEXT,
-            tipo TEXT,
-            medio TEXT,
-            monto_total REAL,
-            moneda TEXT,
-            destinatario TEXT,
-            motivo TEXT,
-            categoria TEXT,
-            es_prestamo INTEGER,
-            monto_pagado REAL,
-            saldo_pendiente REAL,
-            estado_prestamo TEXT,
-            looker INTEGER,
-            latitud REAL,
-            longitud REAL,
-            fuente_gps TEXT,
-            mensaje_raw TEXT,
-            status TEXT,
-            sincronizado INTEGER,
-            intentos_sync INTEGER,
-            ultimo_error_sync TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
-    info("✅ Base de datos verificada/creada")
+BD_TIPO = CONFIG.get('bd', {}).get('tipo', 'sqlite')
+BD_RUTA = CONFIG.get('bd', {}).get('ruta_sqlite', './local_gastos.db')
+MODO_OPERACION = CONFIG.get('modo_operacion', 'automate_broker')
+VENTANA_CONSOLIDACION = CONFIG.get('ventana_consolidacion', {}).get('minutos', 5)
+TIEMPO_ESPERA_GPS = CONFIG.get('procesamiento', {}).get('tiempo_espera_gps_segundos', 10)
+TIEMPO_ESPERA_DIALOGO = CONFIG.get('procesamiento', {}).get('tiempo_espera_dialogo_segundos', 30)
+MAX_INTENTOS_SINCRONIZACION = CONFIG.get('procesamiento', {}).get('maximo_intentos_sincronizacion', 3)
+BACKOFF_ESPERA = CONFIG.get('procesamiento', {}).get('backoff_espera_segundos', [5, 10, 30])
+ADAPTADORES_ACTIVOS = CONFIG.get('adaptadores_activos', [])
+MAPEO_ADAPTADORES = CONFIG.get('mapeo_adaptadores', {})
+DIRECTORIO_ARCHIVOS_AUTOMATE = CONFIG.get('directorio_archivos_automate', '/sdcard/storage/shared/Documents/noti.json')
+LOG_NIVEL = CONFIG.get('logging', {}).get('nivel', 'INFO')
+LOG_ARCHIVO = CONFIG.get('logging', {}).get('archivo', './logs/app.log')
 
-def get_db():
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'local_gastos.db')
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
+# Configurar logger
+logging.basicConfig(level=getattr(logging, LOG_NIVEL, logging.INFO),
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler(LOG_ARCHIVO, encoding='utf-8'), logging.StreamHandler()])
+logger = logging.getLogger("Main")
 
-def cmd_listar():
+# ===================================================================
+# FUNCIÓN 1: Obtener adapter de BD
+# ===================================================================
+def obtener_adapter():
+    db_path = BD_RUTA
+    if not os.path.isabs(db_path):
+        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), db_path)
+    adapter = SQLiteAdapter(db_path)
+    adapter._inicializar_bd()
+    return adapter
+
+# ===================================================================
+# FUNCIÓN 2: GPS Termux
+# ===================================================================
+def obtener_gps():
+    from modulios.termux_api import TermuxAPI
     try:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute('SELECT monto_total, destinatario, motivo FROM transacciones ORDER BY id DESC LIMIT 10')
-        rows = cursor.fetchall()
-        info(f"\nÚltimas {len(rows)} transacciones:")
-        for i, row in enumerate(rows, 1):
-            monto = row[0] if len(row) > 0 else 0
-            destinatario = row[1] if len(row) > 1 else "N/A"
-            motivo = row[2][:20] if len(row) > 2 and row[2] else "SIN MOTIVO"
+        termux_api = TermuxAPI()
+        gps_data = termux_api.obtener_gps(timeout=TIEMPO_ESPERA_GPS)
+        if gps_data:
+            return gps_data.get('latitud'), gps_data.get('longitud'), gps_data.get('fuente_gps', 'live')
+    except Exception:
+        pass
+    return None, None, 'none'
+
+# ===================================================================
+# FUNCIÓN: Trimestre (pura)
+# ===================================================================
+def _trimestre(mes):
+    if mes in [1, 2, 3]: return 'Q1'
+    elif mes in [4, 5, 6]: return 'Q2'
+    elif mes in [7, 8, 9]: return 'Q3'
+    else: return 'Q4'
+
+# ===================================================================
+# FUNCIÓN: Cargar adaptadores dinámicamente
+# ===================================================================
+def cargar_adaptadores():
+    MODULOS = {
+        "ibk": "adaptadores.ibk", "yape": "adaptadores.yape",
+        "bbva": "adaptadores.bbva", "nfc": "adaptadores.nfc",
+        "manual": "adaptadores.manual", "compartamos": "adaptadores.compartamos",
+        "plin": "adaptadores.plin",
+    }
+    adaptadores = {}
+    for clave, mod in MODULOS.items():
+        try:
+            md = importlib.import_module(mod)
+            adaptadores[clave] = getattr(md, clave.capitalize() + "Adapter")
+        except Exception:
+            pass
+    # Filtrar solo los activos en config
+    return {k: v for k, v in adaptadores.items() if k in ADAPTADORES_ACTIVOS}
+
+# ===================================================================
+# FUNCIÓN: Encontrar adaptador por paquete
+# ===================================================================
+def encontrar_adaptador(paquete, adaptadores):
+    for clave, cls in adaptadores.items():
+        if paquete and clave in paquete:
+            return cls()
+    return None
+
+# ===================================================================
+# FUNCIÓN: Comando LISTAR (consola solo)
+# ===================================================================
+def cmd_listar(adapter):
+    try:
+        transacciones = adapter.listar_transacciones(limite=10)
+        for i, row in enumerate(transacciones, 1):
+            monto = row.get('monto_total', 0) if row else 0
+            destinatario = row.get('destinatario', 'N/A') if row else 'N/A'
+            motivo = row.get('motivo', '')[:20] if row and row.get('motivo') else 'SIN MOTIVO'
             print(f"  {i}. Monto: S/ {monto:.2f} | Destinatario: {destinatario} | Motivo: {motivo}")
-        conn.close()
     except Exception as e:
-        error(f"❌ Error al listar: {e}")
+        print(f"❌ Error al listar: {e}", file=sys.stderr)
 
-def cmd_insertar(motivo, monto, tipo, destinatario):
+# ===================================================================
+# FUNCIÓN: Comando INSERTAR
+# ===================================================================
+def cmd_insertar(motivo, monto, tipo, destinatario, adapter, adaptadores):
     try:
-        conn = get_db()
-        cursor = conn.cursor()
-        tipo_db = "gasto" if tipo and tipo.lower() in ["gasto", ""] else "ingreso"
-        mensaje = f"Entrada manual: {motivo} - S/ {monto}"
-        cursor.execute(
-            "INSERT INTO transacciones (tipo, monto_total, destinatario, motivo, mensaje_raw) VALUES (?, ?, ?, ?, ?)",
-            (tipo_db, float(monto), destinatario, motivo, mensaje)
-        )
-        conn.commit()
-        nuevo_id = cursor.lastrowid
-        info(f"✅ Transacción registrada exitosamente!")
-        info(f"   event_id: {nuevo_id}")
-        info(f"   Motivo: {motivo}")
-        info(f"   Monto: S/ {monto:.2f}")
-        info(f"   Tipo: {tipo}")
-        info(f"   Destinatario: {destinatario}")
-        conn.close()
+        ahora = datetime.datetime.now()
+        q = _trimestre(ahora.month)
+        adaptador = encontrar_adaptador('manual', adaptadores)
+        if adaptador is None:
+            import adaptadores.manual as m
+            adaptador = m.ManualAdapter
+        adapter.guardar_transaccion_sql_directo(
+            id_transaccion=os.urandom(12).hex(),
+            fecha_hora_epoch=_time.time(),
+            fecha_iso=ahora.isoformat(),
+            fecha=ahora.strftime('%Y-%m-%d'),
+            hora=ahora.strftime('%H:%M:%S'),
+            trimestre=q, app='manual', paquete='manual.entry', dispositivo='CLI-Manual',
+            tipo=tipo, medio='', monto_total=monto, moneda='PEN',
+            destinatario=destinatario, motivo=motivo, categoria='Manual',
+            es_prestamo=0, monto_pagado=0.0, saldo_pendiente=monto,
+            estado_prestamo='activo', looker=0, latitud=None, longitud=None,
+            fuente_gps='none', mensaje_raw=f'{motivo} - S/ {monto}',
+            status='pendiente', sincronizado=0, intentos_sync=0, ultimo_error_sync='')
+        print(f"✅ Transacción registrada: event_id generado en BD")
     except Exception as e:
-        error(f"❌ Error al insertar: {e}")
+        print(f"❌ Error al insertar: {e}", file=sys.stderr)
 
+# ===================================================================
+# FUNCIÓN: Procesar notificación (pipeline automate_broker)
+# ===================================================================
+def procesar_notificacion(datos_crudos, adapter, adaptadores, termux_api, ventana_minutos):
+    from modulios.termux_api import TermuxAPI
+    
+    # 1. Enrutar adaptador
+    paquete = datos_crudos.get('packageName', '') or datos_crudos.get('package', '')
+    adaptador = encontrar_adaptador(paquete, adaptadores)
+    if not adaptador:
+        warning("Ningún adaptador reconoció este paquete: " + paquete)
+        return False
+    
+    # 2. Normalizar
+    normalizado = adaptador.normalizar_notificacion(datos_crudos)
+    
+    # 2B. Validar duplicado (misma tipo NUNCA es duplicado)
+    # Según RESUMEN-SISTEMA.md: consolidar si mismo destinatario + monto + ventana
+    ventana_segundos = ventana_minutos * 60
+    # Lógica simplificada: crear objeto consolidador mínimo
+    try:
+        from modulios.consolidador import Consolidador
+        c = Consolidador(ventana_minutos=ventana_minutos)
+        es_duplicado = c.verificar_duplicado_ventana(normalizado)
+    except Exception:
+        es_duplicado = False
+    
+    if es_duplicado:
+        info("🔁 Duplicado en ventana de consolidación - sin registrar nuevo")
+        return False
+    
+    # 3. Solicitar motivo (OBLIGATORIO)
+    td = TermuxAPI()
+    tipo = normalizado.get('tipo', 'gasto')
+    pregunta = "[%s] ¿Cuál fue el motivo de este %s? (app: %s)" % (tipo.upper(), 
+        'gasto' if tipo == 'gasto' else 'ingreso', normalizado.get('origen_paquete', 'app'))
+    resultado = td.mostrar_dialogo(widget="text", titulo="[%s] Motivo" % tipo.upper(), mensaje=pregunta)
+    if resultado and "text" in resultado:
+        motivo_usuario = resultado["text"].strip()
+        normalizado['motivo'] = motivo_usuario if motivo_usuario else None
+    else:
+        normalizado['motivo'] = "Sin motivo especificado"
+    
+    # 4. GPS
+    lat = obtener_gps()
+    
+    # 5. Insertar en SQLite
+    try:
+        ahora = datetime.datetime.now()
+        q = _trimestre(ahora.month)
+        adapter.guardar_transaccion_sql_directo(
+            id_transaccion=normalizado.get('event_id') or os.urandom(12).hex(),
+            fecha_hora_epoch=_time.time(),
+            fecha_iso=ahora.isoformat(),
+            fecha=ahora.strftime('%Y-%m-%d'),
+            hora=ahora.strftime('%H:%M:%S'),
+            trimestre=q, app=normalizado.get('origen_paquete', 'manual'), paquete=normalizado.get('paquete', ''),
+            dispositivo=os.environ.get('ANDROID_ID', 'CLI-Manual'),
+            tipo=normalizado.get('tipo', 'gasto'), medio=normalizado.get('medio', ''),
+            monto_total=normalizado.get('monto', 0.0), moneda=normalizado.get('moneda', 'PEN'),
+            destinatario=normalizado.get('destinatario', 'desconocido'), motivo=normalizado.get('motivo', ''),
+            categoria=normalizado.get('categoria', 'Manual'), es_prestamo=normalizado.get('es_prestamo', 0),
+            monto_pagado=normalizado.get('monto_pagado', 0.0), saldo_pendiente=normalizado.get('saldo_pendiente', 0.0),
+            estado_prestamo=normalizado.get('estado_prestamo', 'activo'), looker=normalizado.get('looker', 0),
+            latitud=lat[0], longitud=lat[1], fuente_gps=lat[2],
+            mensaje_raw=normalizado.get('mensaje_raw', ''), status='consolidado',
+            sincronizado=0, intentos_sync=0, ultimo_error_sync='')
+        info("✅ Transacción registrada: event_id generado en BD")
+        return True
+    except Exception as e:
+        error("❌ Error guardando en BD: " + str(e))
+        return False
+
+# ===================================================================
+# FUNCIÓN: Modo AUTOMATE BROKER (FIFO)
+# ===================================================================
+def modo_automate_broker():
+    info("▶ Modo automate_broker: " + DIRECTORIO_ARCHIVOS_AUTOMATE)
+    
+    directorio = DIRECTORIO_ARCHIVOS_AUTOMATE if DIRECTORIO_ARCHIVOS_AUTOMATE else os.path.join(os.path.expanduser('~'), 'Automate', 'notify')
+    
+    if not os.path.isdir(directorio):
+        warning("Directorio no existe: " + directorio)
+        return
+    
+    archivos = [f for f in os.listdir(directorio) if f.endswith('.json')]
+    if not archivos:
+        info("📭 No hay archivos nuevos")
+        return
+    
+    from modulios.consolidador import Consolidador
+    consolidador = Consolidador(ventana_minutos=VENTANA_CONSOLIDACION)
+    termux_api = TermuxAPI()
+    
+    for archivo in sorted(archivos):
+        ruta = os.path.join(directorio, archivo)
+        try:
+            with open(ruta, 'r', encoding='utf-8') as f:
+                datos_crudos = json.load(f)
+        except Exception as e:
+            error("❌ Leyendo " + archivo + ": " + str(e))
+            continue
+        
+        procesar_notificacion(datos_crudos, adapter, adaptadores, termux_api, VENTANA_CONSOLIDACION)
+        try:
+            os.remove(ruta)
+        except Exception:
+            pass
+
+# ===================================================================
+# FUNCIÓN: Modo LISTENER DIRECTO
+# ===================================================================
+def modo_listener_directo():
+    info("🎧 Modo listener_directo configurado:")
+    info("   Modo operacional: " + MODO_OPERACION)
+    info("   Adaptadores: " + ", ".join(ADAPTADORES_ACTIVOS))
+    info("   Ventana consolidación: " + str(VENTANA_CONSOLIDACION) + " min")
+    info("   GPS espera: " + str(TIEMPO_ESPERA_GPS) + "s")
+    info("   Dialogo espera: " + str(TIEMPO_ESPERA_DIALOGO) + "s")
+    info("   Próximo paso: bucle while True + capturar nativa")
+
+# ===================================================================
+# FUNCIÓN: PUNTO DE ENTRADA
+# ===================================================================
 def main():
-    print("=" * 50)
-    print("SISTEMA LOCAL-GESTION-GASTOS")
-    print("=" * 50)
-    _crear_tabla_si_no_existe()
-    conn = sqlite3.connect(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'local_gastos.db'))
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM transacciones')
-    total = cursor.fetchone()[0]
-    conn.close()
-    info(f"📊 Total de transacciones en BD: {total}")
-    parser = argparse.ArgumentParser(description="Sistema de gestión de gastos")
-    parser.add_argument("--accion", choices=["listar", "insertar"], default="listar", help="Acción a realizar")
+    parser = argparse.ArgumentParser(description="Sistema local-gestion-gastos", add_help=False)
+    parser.add_argument("--accion", choices=["listar", "insertar", "automate_broker", "listener_directo"],
+                        default="listar", help="Acción")
     parser.add_argument("--motivo", type=str, default="", help="Motivo")
     parser.add_argument("--monto", type=float, default=0.0, help="Monto")
     parser.add_argument("--tipo", type=str, default="gasto", help="Tipo (gasto/ingreso)")
     parser.add_argument("--destinatario", type=str, default="", help="Destinatario")
+    parser.add_argument("--directorio", type=str, default="",
+                        help="Directorio override automate_broker")
     args = parser.parse_args()
+    
+    adapter = obtener_adapter()
+    adaptadores = cargar_adaptadores()
+    lat = obtener_gps()
+    
     if args.accion == "listar":
-        cmd_listar()
+        cmd_listar(adapter)
     elif args.accion == "insertar":
-        cmd_insertar(args.motivo, args.monto, args.tipo, args.destinatario)
-    info("\n--- Fin del sistema ---")
+        cmd_insertar(args.motivo, args.monto, args.tipo, args.destinatario, adapter, adaptadores)
+    elif args.accion == "automate_broker":
+        modo_automate_broker()
+    elif args.accion == "listener_directo":
+        modo_listener_directo()
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
