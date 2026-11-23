@@ -315,7 +315,8 @@ def main():
     elif args.directorio:
         archivo_json = args.directorio
     else:
-        archivo_json = None  # Forzará uso del default desde modo_automate_broker
+        # Si no se pasan argumentos, usar el default de config.yaml
+        archivo_json = DIRECTORIO_CONF
     
     # Inicializaciones
     adapter = obtener_adapter()
@@ -327,7 +328,7 @@ def main():
     elif args.accion == "insertar":
         cmd_insertar(args.motivo, args.monto, args.tipo, args.destinatario, adapter, adaptadores)
     elif args.accion == "automate_broker":
-        modo_automate_broker(adapter, adaptadores, args.archivo_json)
+        modo_automate_broker(adapter, adaptadores, archivo_json)
     elif args.accion == "listener_directo":
         modo_listener_directo()
 
