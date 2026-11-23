@@ -5,6 +5,7 @@ import os, sys, argparse, json, datetime, time as _time, logging, importlib, yam
 from adaptadores.infraestructura.sqlite_adapter import SQLiteAdapter
 from modulios.logger import info, warning, error
 from modulios.termux_api import TermuxAPI
+from modulios.consolidador import Consolidador
 
 # ===================================================================
 # CONFIGURACIÓN CENTRAL (leída de config.yaml)
@@ -23,7 +24,7 @@ MAX_INTENTOS_SINCRONIZACION = CONFIG.get('procesamiento', {}).get('maximo_intent
 BACKOFF_ESPERA = CONFIG.get('procesamiento', {}).get('backoff_espera_segundos', [5, 10, 30])
 ADAPTADORES_ACTIVOS = CONFIG.get('adaptadores_activos', [])
 MAPEO_ADAPTADORES = CONFIG.get('mapeo_adaptadores', {})
-DIRECTORIO_ARCHIVOS_AUTOMATE = CONFIG.get('directorio_archivos_automate', '/sdcard/storage/shared/Documents/noti.json')
+DIRECTORIO_CONF = CONFIG.get('directorio_archivos_automate', '/sdcard/storage/shared/Documents/noti.json')
 LOG_NIVEL = CONFIG.get('logging', {}).get('nivel', 'INFO')
 LOG_ARCHIVO = CONFIG.get('logging', {}).get('archivo', './logs/app.log')
 
@@ -142,28 +143,19 @@ def cmd_insertar(motivo, monto, tipo, destinatario, adapter, adaptadores):
 # FUNCIÓN: Procesar notificación (pipeline automate_broker)
 # ===================================================================
 def procesar_notificacion(datos_crudos, adapter, adaptadores, termux_api, ventana_minutos):
-    from modulios.termux_api import TermuxAPI
-    
     # 1. Enrutar adaptador
     paquete = datos_crudos.get('packageName', '') or datos_crudos.get('package', '')
-    adaptador = encontrar_adaptador(paquete, adaptadores)
-    if not adaptador:
+    adaptador_local = encontrar_adaptador(paquete, adaptadores)
+    if not adaptador_local:
         warning("Ningún adaptador reconoció este paquete: " + paquete)
         return False
     
     # 2. Normalizar
-    normalizado = adaptador.normalizar_notificacion(datos_crudos)
+    normalizado = adaptador_local.normalizar_notificacion(datos_crudos)
     
     # 2B. Validar duplicado (misma tipo NUNCA es duplicado)
-    # Según RESUMEN-SISTEMA.md: consolidar si mismo destinatario + monto + ventana
-    ventana_segundos = ventana_minutos * 60
-    # Lógica simplificada: crear objeto consolidador mínimo
-    try:
-        from modulios.consolidador import Consolidador
-        c = Consolidador(ventana_minutos=ventana_minutos)
-        es_duplicado = c.verificar_duplicado_ventana(normalizado)
-    except Exception:
-        es_duplicado = False
+    c = Consolidador(ventana_minutos=ventana_minutos)
+    es_duplicado = c.verificar_duplicado_ventana(normalizado)
     
     if es_duplicado:
         info("🔁 Duplicado en ventana de consolidación - sin registrar nuevo")
@@ -212,12 +204,22 @@ def procesar_notificacion(datos_crudos, adapter, adaptadores, termux_api, ventan
         return False
 
 # ===================================================================
-# FUNCIÓN: Modo AUTOMATE BROKER (FIFO)
+# FUNCIÓN: Modo AUTOMATE BROKER (FIXED - usa el argumento --directorio)
 # ===================================================================
-def modo_automate_broker():
-    info("▶ Modo automate_broker: " + DIRECTORIO_ARCHIVOS_AUTOMATE)
+def modo_automate_broker(directorio_override=None):
+    """
+    Modo automate_broker: Automate deja archivo .json en directorio configurado.
+    Procesa cada archivo por el pipeline: adaptador → consolidar → motivo → GPS → SQLite.
+    El directorio puede venir por config.yaml o por argumento --directorio.
+    """
+    # Usar el directoriooverride si se proporcionó, sino el de config.yaml
+    directorio = directorio_override if directorio_override else DIRECTORIO_CONF
     
-    directorio = DIRECTORIO_ARCHIVOS_AUTOMATE if DIRECTORIO_ARCHIVOS_AUTOMATE else os.path.join(os.path.expanduser('~'), 'Automate', 'notify')
+    # Si el directorio es un archivo (como en config.yaml), obtener su directorio padre
+    if os.path.isfile(directorio):
+        directorio = os.path.dirname(directorio)
+    
+    info("▶ Modo automate_broker: procesando " + directorio)
     
     if not os.path.isdir(directorio):
         warning("Directorio no existe: " + directorio)
@@ -228,7 +230,6 @@ def modo_automate_broker():
         info("📭 No hay archivos nuevos")
         return
     
-    from modulios.consolidador import Consolidador
     consolidador = Consolidador(ventana_minutos=VENTANA_CONSOLIDACION)
     termux_api = TermuxAPI()
     
@@ -271,9 +272,10 @@ def main():
     parser.add_argument("--tipo", type=str, default="gasto", help="Tipo (gasto/ingreso)")
     parser.add_argument("--destinatario", type=str, default="", help="Destinatario")
     parser.add_argument("--directorio", type=str, default="",
-                        help="Directorio override automate_broker")
+                        help="Directorio override para automate_broker (sobreescribe config.yaml)")
     args = parser.parse_args()
     
+    # Inicializaciones (siempre, aunque no se muestre nada)
     adapter = obtener_adapter()
     adaptadores = cargar_adaptadores()
     lat = obtener_gps()
@@ -283,7 +285,8 @@ def main():
     elif args.accion == "insertar":
         cmd_insertar(args.motivo, args.monto, args.tipo, args.destinatario, adapter, adaptadores)
     elif args.accion == "automate_broker":
-        modo_automate_broker()
+        # Pasar el directorio override si se proporcionó, sino el de config
+        modo_automate_broker(args.directorio)
     elif args.accion == "listener_directo":
         modo_listener_directo()
 
