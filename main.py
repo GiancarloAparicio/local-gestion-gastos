@@ -308,6 +308,15 @@ def main():
                         help="Directorio para modo legacy (procesa todos los .json)")
     args = parser.parse_args()
     
+    # Determinar el archivo JSON a procesar:
+    # Prioridad: --archivo-json > --directorio (legacy) > config.yaml default
+    if args.archivo_json:
+        archivo_json = args.archivo_json
+    elif args.directorio:
+        archivo_json = args.directorio
+    else:
+        archivo_json = None  # Forzará uso del default desde modo_automate_broker
+    
     # Inicializaciones
     adapter = obtener_adapter()
     adaptadores = cargar_adaptadores()
