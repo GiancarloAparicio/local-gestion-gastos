@@ -2,18 +2,10 @@ import os
 import argparse
 import sqlite3
 
-# Ruta del log usando el directorio home para que funcione en cualquier entorno
-LOG_FILE = os.path.join(os.path.expanduser('~'), '.local_gestion_gastos', 'app.log')
+from modulios.logger import info, warning, error, setup_logger
 
-def log_info(mensaje):
-    try:
-        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
-        with open(LOG_FILE, 'a', encoding='utf-8') as f:
-            import datetime
-            f.write(f"{os.pactime.strftime('%Y-%m-%d %H:%M:%S', __import__('time').localtime())} - INFO - {mensaje}\n")
-        print(f"INFO: {mensaje}")
-    except Exception as e:
-        print(f"ERROR de logging: {e}")
+# Configuración inicial - el logger ya está configurado en modulios.logger
+# usando la ruta de archivo desde config.yaml (./logs/app.log)
 
 def _crear_tabla_si_no_existe():
     """Crea la tabla transacciones si no existe, con la estructura completa."""
@@ -56,6 +48,7 @@ def _crear_tabla_si_no_existe():
     ''')
     conn.commit()
     conn.close()
+    info("✅ Base de datos verificada/creada")
 
 def get_db():
     db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'local_gastos.db')
@@ -69,7 +62,7 @@ def cmd_listar():
         cursor = conn.cursor()
         cursor.execute('SELECT monto_total, destinatario, motivo FROM transacciones ORDER BY id DESC LIMIT 10')
         rows = cursor.fetchall()
-        print(f"\nÚltimas {len(rows)} transacciones:")
+        info(f"\nÚltimas {len(rows)} transacciones:")
         for i, row in enumerate(rows, 1):
             monto = row[0] if len(row) > 0 else 0
             destinatario = row[1] if len(row) > 1 else "N/A"
@@ -77,7 +70,7 @@ def cmd_listar():
             print(f"  {i}. Monto: S/ {monto:.2f} | Destinatario: {destinatario} | Motivo: {motivo}")
         conn.close()
     except Exception as e:
-        print(f"❌ Error al listar: {e}")
+        error(f"❌ Error al listar: {e}")
 
 def cmd_insertar(motivo, monto, tipo, destinatario):
     try:
@@ -91,18 +84,15 @@ def cmd_insertar(motivo, monto, tipo, destinatario):
         )
         conn.commit()
         nuevo_id = cursor.lastrowid
-        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
-        with open(LOG_FILE, 'a', encoding='utf-8') as f:
-            f.write(f"evento_id={nuevo_id}|motivo={motivo}|monto={monto:.2f}|tipo={tipo}\n")
-        print(f"✅ Transacción registrada exitosamente!")
-        print(f"   event_id: {nuevo_id}")
-        print(f"   Motivo: {motivo}")
-        print(f"   Monto: S/ {monto:.2f}")
-        print(f"   Tipo: {tipo}")
-        print(f"   Destinatario: {destinatario}")
+        info(f"✅ Transacción registrada exitosamente!")
+        info(f"   event_id: {nuevo_id}")
+        info(f"   Motivo: {motivo}")
+        info(f"   Monto: S/ {monto:.2f}")
+        info(f"   Tipo: {tipo}")
+        info(f"   Destinatario: {destinatario}")
         conn.close()
     except Exception as e:
-        print(f"❌ Error al insertar: {e}")
+        error(f"❌ Error al insertar: {e}")
 
 def main():
     print("=" * 50)
@@ -114,7 +104,7 @@ def main():
     cursor.execute('SELECT COUNT(*) FROM transacciones')
     total = cursor.fetchone()[0]
     conn.close()
-    print(f"📊 Total de transacciones en BD: {total}")
+    info(f"📊 Total de transacciones en BD: {total}")
     parser = argparse.ArgumentParser(description="Sistema de gestión de gastos")
     parser.add_argument("--accion", choices=["listar", "insertar"], default="listar", help="Acción a realizar")
     parser.add_argument("--motivo", type=str, default="", help="Motivo")
@@ -126,7 +116,7 @@ def main():
         cmd_listar()
     elif args.accion == "insertar":
         cmd_insertar(args.motivo, args.monto, args.tipo, args.destinatario)
-    print("\n--- Fin del sistema ---")
+    info("\n--- Fin del sistema ---")
 
 if __name__ == "__main__":
     main()

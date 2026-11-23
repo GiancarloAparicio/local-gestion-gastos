@@ -2,21 +2,37 @@
 
 Proporciona funcionalidad de logging estructurado que escribe en un archivo
 y también output a consola. Diseñado para funcionar en Termux/Linux con
-permisos restringidos (solo propietario).
+permisos restringidos (solo propietario). Lee la configuración de archivo
+del archivo config.yaml.
+
+Ejemplo de uso:
+    from modulios.logger import setup_logger, info, warning, error
+    info("Sistema iniciado")
 """
 
 import logging
 import os
 import sys
+import yaml
 from datetime import datetime
 from pathlib import Path
 
-# Configuración por defecto
-DEFAULT_LOG_DIR = Path(__file__).parent.parent / "logs"
-DEFAULT_LOG_FILE = DEFAULT_LOG_DIR / "app.log"
-DEFAULT_LOG_LEVEL = logging.INFO
-DEFAULT_LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+# Cargar configuración de logging desde config.yaml
+RUTA_CONFIG = Path(__file__).parent.parent / "config.yaml"
+try:
+    with open(RUTA_CONFIG, 'r', encoding='utf-8') as f:
+        config_yaml = yaml.safe_load(f)
+    LOG_CONFIG = config_yaml.get('logging', {}) if config_yaml else {}
+    LOG_LEVEL = getattr(logging, LOG_CONFIG.get('nivel', 'INFO'), logging.INFO)
+    LOG_ARCHIVO = Path(LOG_CONFIG.get('archivo', './logs/app.log'))
+    LOG_FORMAT_STR = LOG_CONFIG.get('format', "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    LOG_DATE_FORMAT = LOG_CONFIG.get('datefmt', "%Y-%m-%d %H:%M:%S")
+except Exception:
+    # Fallbacks si config.yaml no está disponible
+    LOG_LEVEL = logging.INFO
+    LOG_ARCHIVO = Path("./logs/app.log")
+    LOG_FORMAT_STR = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 class ColoredFormatter(logging.Formatter):
@@ -43,12 +59,23 @@ class ColoredFormatter(logging.Formatter):
 
 def setup_logger(
     name: str = "local_gestion_gastos",
-    log_file: Path = DEFAULT_LOG_FILE,
-    level: int = DEFAULT_LOG_LEVEL,
-    format_str: str = DEFAULT_LOG_FORMAT,
-    datefmt: str = DATE_FORMAT,
-) -> logging.Logger:
-    """Configura y retorna un logger con archivo y consola."""
+    log_file: Path = None,
+    level: int = None,
+    format_str: str = None,
+    datefmt: str = None) -> logging.Logger:
+    """Configura y retorna un logger con archivo y consola.
+    
+    Si no se proporcionan parámetros, usa la configuración de config.yaml.
+    """
+    # Usar configuración por defecto si no se proporcionan argumentos
+    if log_file is None:
+        log_file = LOG_ARCHIVO
+    if level is None:
+        level = LOG_LEVEL
+    if format_str is None:
+        format_str = LOG_FORMAT_STR
+    if datefmt is None:
+        datefmt = LOG_DATE_FORMAT
     
     # Asegurar que el directorio de logs exista
     try:
@@ -89,6 +116,7 @@ def setup_logger(
 
 
 # Instanciar el logger por defecto al importar
+# Usará la ruta de archivo desde config.yaml
 logger = setup_logger()
 
 # Funciones de conveniencia
