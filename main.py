@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sistema local-gestion-gastos - main.py modular, leyendo config.yaml."""
 
-import os, sys, argparse, json, datetime, time as _time, logging, importlib, yaml
+import os, sys, argparse, json, datetime, time as _time, logging, importlib, yaml, sqlite3
 from adaptadores.infraestructura.sqlite_adapter import SQLiteAdapter
 from modulios.logger import info, warning, error
 from modulios.termux_api import TermuxAPI
@@ -39,7 +39,7 @@ logger = logging.getLogger("Main")
 # ===================================================================
 # FUNCIÓN 1: Obtener adapter de BD
 # ===================================================================
-def obtener_adapter():
+def obtener_adapter_BD():
     db_path = BD_RUTA
     if not os.path.isabs(db_path):
         db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), db_path)
@@ -292,11 +292,38 @@ def modo_listener_directo():
     logger.info("   Próximo paso: bucle while True + capturar nativa")
 
 # ===================================================================
+# FUNCIÓN: LIMITAR BASE DE DATOS
+# ===================================================================
+def limpiar_base_datos():
+    """Limpiar/Resetear la base de datos SQLite.
+    
+    Elimina todas las transacciones de la base de datos,
+    útil para reiniciar el estado después de pruebas.
+    """
+    db_path = BD_RUTA
+    if not os.path.isabs(db_path):
+        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), db_path)
+    
+    if os.path.exists(db_path):
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        # Contar transacciones antes de borrar
+        cursor.execute("SELECT COUNT(*) FROM transacciones")
+        count = cursor.fetchone()[0]
+        # Borrar todas las transacciones
+        cursor.execute("DELETE FROM transacciones")
+        conn.commit()
+        conn.close()
+        info(f"🗑️ Base de datos limpiada: se removieron {count} transacciones")
+    else:
+        warning("⚠️ No existe base de datos para limpiar: " + db_path)
+
+# ===================================================================
 # FUNCIÓN: PUNTO DE ENTRADA
 # ===================================================================
 def main():
     parser = argparse.ArgumentParser(description="Sistema local-gestion-gastos", add_help=False)
-    parser.add_argument("--accion", choices=["listar", "insertar", "automate_broker", "listener_directo"],
+    parser.add_argument("--accion", choices=["listar", "insertar", "automate_broker", "listener_directo", "limpiar"],
                         default="listar", help="Acción")
     parser.add_argument("--motivo", type=str, default="", help="Motivo")
     parser.add_argument("--monto", type=float, default=0.0, help="Monto")
@@ -306,6 +333,8 @@ def main():
                         help="Archivo JSON a procesar (modo automate_broker)")
     parser.add_argument("--directorio", type=str, default="",
                         help="Directorio para modo legacy (procesa todos los .json)")
+    parser.add_argument("--limpiar", action="store_true", default=False,
+                        help="Limpiar/resetear la base de datos SQLite")
     args = parser.parse_args()
     
     # Determinar el archivo JSON a procesar:
@@ -319,16 +348,18 @@ def main():
         archivo_json = DIRECTORIO_CONF
     
     # Inicializaciones
-    adapter = obtener_adapter()
+    adapter_db = obtener_adapter_BD()
     adaptadores = cargar_adaptadores()
     lat = obtener_gps()
     
-    if args.accion == "listar":
-        cmd_listar(adapter)
+    if args.limpiar:
+        limpiar_base_datos()
+    elif args.accion == "listar":
+        cmd_listar(adapter_db)
     elif args.accion == "insertar":
-        cmd_insertar(args.motivo, args.monto, args.tipo, args.destinatario, adapter, adaptadores)
+        cmd_insertar(args.motivo, args.monto, args.tipo, args.destinatario, adapter_db, adaptadores)
     elif args.accion == "automate_broker":
-        modo_automate_broker(adapter, adaptadores, archivo_json)
+        modo_automate_broker(adapter_db, adaptadores, archivo_json)
     elif args.accion == "listener_directo":
         modo_listener_directo()
 
