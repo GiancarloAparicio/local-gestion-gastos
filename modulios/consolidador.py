@@ -34,6 +34,21 @@ class Consolidador:
         """Obtiene la marca de tiempo actual menos la ventana de consolidación."""
         return datetime.now() - self.ventana_timedelta
 
+    def verificar_duplicado_ventana(self, datos_nuevos) -> bool:
+        """Determina si una nueva notificación debe consolidarse en una existente.
+        
+        Args:
+            datos_nuevos: Diccionario con los datos de la nueva notificación
+        
+        Returns:
+            True si la notificación debe consolidarse (duplicado en ventana),
+            False si es un registro nuevo
+        """
+        # Versión simplificada: retornar False para que siempre sea un nuevo registro
+        # En una implementación completa, compararía la fecha/hora de la notificación
+        # previa con la actual usando self.ventana_timedelta
+        return False
+
 
 # Instancia global con configuración por defecto (5 minutos)
 consolidador = Consolidador(ventana_minutos=5)

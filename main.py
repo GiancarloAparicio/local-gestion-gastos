@@ -27,7 +27,7 @@ MAPEO_ADAPTADORES = CONFIG.get('mapeo_adaptadores', {})
 DIRECTORIO_CONF = CONFIG.get('directorio_archivos_automate', '/sdcard/storage/shared/Documents/noti.json')
 LOG_NIVEL = CONFIG.get('logging', {}).get('nivel', 'INFO')
 LOG_ARCHIVO = CONFIG.get('logging', {}).get('archivo', './logs/app.log')
-# --- NUEVA CONFIGURACIÓN DE TERMUX ---
+# --- Configuración de Termux ---
 TERMUX_PATH = CONFIG.get('termux', {}).get('path', '/data/data/com.termux/files/usr/bin')
 
 # Configurar logger
@@ -53,7 +53,6 @@ def obtener_adapter():
 def obtener_gps():
     from modulios.termux_api import TermuxAPI
     try:
-        # Pasar la ruta de Termux desde config
         termux_api = TermuxAPI(termux_path=TERMUX_PATH)
         gps_data = termux_api.obtener_gps(timeout=TIEMPO_ESPERA_GPS)
         if gps_data:
@@ -106,13 +105,18 @@ def encontrar_adaptador(paquete, adaptadores):
 def cmd_listar(adapter):
     try:
         transacciones = adapter.listar_transacciones(limite=10)
+        if not transacciones:
+            print("📭 No hay transacciones registradas")
+            return
         for i, row in enumerate(transacciones, 1):
             monto = row.get('monto_total', 0) if row else 0
             destinatario = row.get('destinatario', 'N/A') if row else 'N/A'
             motivo = row.get('motivo', '')[:20] if row and row.get('motivo') else 'SIN MOTIVO'
-            print(\1, flush=True)
+            print(f"  {i}. Monto: S/ {monto:.2f} | Destinatario: {destinatario} | Motivo: {motivo}")
     except Exception as e:
-        print(\1, flush=True)
+        print(f"❌ Error al listar: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
 
 # ===================================================================
 # FUNCIÓN: Comando INSERTAR
@@ -138,9 +142,11 @@ def cmd_insertar(motivo, monto, tipo, destinatario, adapter, adaptadores):
             estado_prestamo='activo', looker=0, latitud=None, longitud=None,
             fuente_gps='none', mensaje_raw=f'{motivo} - S/ {monto}',
             status='pendiente', sincronizado=0, intentos_sync=0, ultimo_error_sync='')
-        print(\1, flush=True)
+        print("✅ Transacción registrada: event_id generado en BD")
     except Exception as e:
-        print(\1, flush=True)
+        print(f"❌ Error al insertar: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
 
 # ===================================================================
 # FUNCIÓN: Procesar notificación (pipeline automate_broker)
@@ -196,9 +202,9 @@ def procesar_notificacion(datos_crudos, adapter, adaptadores, termux_api, ventan
             tipo=normalizado.get('tipo', 'gasto'), medio=normalizado.get('medio', ''),
             monto_total=normalizado.get('monto', 0.0), moneda=normalizado.get('moneda', 'PEN'),
             destinatario=normalizado.get('destinatario', 'desconocido'), motivo=normalizado.get('motivo', ''),
-            categoria=normalized.get('categoria', 'Manual'), es_prestamo=normalizado.get('es_prestamo', 0),
+            categoria=normalizado.get('categoria', 'Manual'), es_prestamo=normalizado.get('es_prestamo', 0),
             monto_pagado=normalizado.get('monto_pagado', 0.0), saldo_pendiente=normalizado.get('saldo_pendiente', 0.0),
-            estado_prestamo=normalizado.get('estado_prestamo', 'activo'), looker=normalized.get('looker', 0),
+            estado_prestamo=normalizado.get('estado_prestamo', 'activo'), looker=normalizado.get('looker', 0),
             latitud=lat[0], longitud=lat[1], fuente_gps=lat[2],
             mensaje_raw=normalizado.get('mensaje_raw', ''), status='consolidado',
             sincronizado=0, intentos_sync=0, ultimo_error_sync='')
@@ -225,18 +231,14 @@ def modo_automate_broker(adapter, adaptadores, archivo_json=None):
         archivo_json = DIRECTORIO_CONF
     
     # Modo: procesar un archivo JSON específico
-    if not os.path.isdir(archivo_json) and os.path.isfile(archivo_json):
-        info("▶ Modo automate_broker: procesando archivo " + archivo_json)
-        
-        if not os.path.isfile(archivo_json):
-            error("Archivo no encontrado: " + archivo_json)
-            return
+    if os.path.isfile(archivo_json):
+        logger.info("▶ Modo automate_broker: procesando archivo " + archivo_json)
         
         try:
             with open(archivo_json, 'r', encoding='utf-8') as f:
                 datos_crudos = json.load(f)
         except Exception as e:
-            error("❌ Leyendo " + archivo_json + ": " + str(e))
+            logger.error("❌ Leyendo " + archivo_json + ": " + str(e))
             return
         
         procesar_notificacion(datos_crudos, adapter, adaptadores, TermuxAPI(termux_path=TERMUX_PATH), VENTANA_CONSOLIDACION)
@@ -254,11 +256,11 @@ def modo_automate_broker(adapter, adaptadores, archivo_json=None):
         warning("Directorio no existe: " + directorio)
         return
     
-    info("▶ Modo automate_broker: procesando directorio " + directorio)
+    logger.info("▶ Modo automate_broker: procesando directorio " + directorio)
     
     archivos = [f for f in os.listdir(directorio) if f.endswith('.json')]
     if not archivos:
-        info("📭 No hay archivos nuevos")
+        logger.info("📭 No hay archivos nuevos")
         return
     
     termux_api = TermuxAPI(termux_path=TERMUX_PATH)
@@ -275,4 +277,49 @@ def modo_automate_broker(adapter, adaptadores, archivo_json=None):
             except Exception:
                 pass
         except Exception as e:
-            error("❌ Error procesando " + archivo + ": " + str(e))
+            logger.error("❌ Error procesando " + archivo + ": " + str(e))
+
+# ===================================================================
+# FUNCIÓN: Modo LISTENER DIRECTO
+# ===================================================================
+def modo_listener_directo():
+    logger.info("🎧 Modo listener_directo configurado:")
+    logger.info("   Modo operacional: " + MODO_OPERACION)
+    logger.info("   Adaptadores: " + ", ".join(ADAPTADORES_ACTIVOS))
+    logger.info("   Ventana consolidación: " + str(VENTANA_CONSOLIDACION) + " min")
+    logger.info("   GPS espera: " + str(TIEMPO_ESPERA_GPS) + "s")
+    logger.info("   Dialogo espera: " + str(TIEMPO_ESPERA_DIALOGO) + "s")
+    logger.info("   Próximo paso: bucle while True + capturar nativa")
+
+# ===================================================================
+# FUNCIÓN: PUNTO DE ENTRADA
+# ===================================================================
+def main():
+    parser = argparse.ArgumentParser(description="Sistema local-gestion-gastos", add_help=False)
+    parser.add_argument("--accion", choices=["listar", "insertar", "automate_broker", "listener_directo"],
+                        default="listar", help="Acción")
+    parser.add_argument("--motivo", type=str, default="", help="Motivo")
+    parser.add_argument("--monto", type=float, default=0.0, help="Monto")
+    parser.add_argument("--tipo", type=str, default="gasto", help="Tipo (gasto/ingreso)")
+    parser.add_argument("--destinatario", type=str, default="", help="Destinatario")
+    parser.add_argument("--archivo-json", type=str, default="",
+                        help="Archivo JSON a procesar (modo automate_broker)")
+    parser.add_argument("--directorio", type=str, default="",
+                        help="Directorio para modo legacy (procesa todos los .json)")
+    args = parser.parse_args()
+    
+    # Inicializaciones
+    adapter = obtener_adapter()
+    adaptadores = cargar_adaptadores()
+    lat = obtener_gps()
+    
+    if args.accion == "listar":
+        cmd_listar(adapter)
+    elif args.accion == "insertar":
+        cmd_insertar(args.motivo, args.monto, args.tipo, args.destinatario, adapter, adaptadores)
+    elif args.accion == "automate_broker":
+        modo_automate_broker(adapter, adaptadores, args.archivo_json)
+    elif args.accion == "listener_directo":
+        modo_listener_directo()
+
+if __name__ == "__main__": main()
