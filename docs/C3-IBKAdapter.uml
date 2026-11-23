@@ -1,6 +1,6 @@
 @startuml
 skinparam DefaultTextAlignment center
-title Proceso IBK: 3 Formatos - TRAN, PLIN, TARJETA, NFC
+title Proceso IBK: 4 Formatos - TRAN, PLIN, TARJETA, NFC
 
 state "INICIO" as start
 state "Recibir notificación" as recv
@@ -38,8 +38,8 @@ tarjeta_rule --> duplicados: No (NUNCA duplicado)
 tarjeta_rule --> consolidar_regla: Consolidar si tipo diferente
 
 duplicados --> nfc_rule: ¿Es NFC + NFC?
-nfc_rule --> duplicados: No (NUNCA duplicado)
-nfc_rule --> consolidar_regla: Consolidar si tipo diferente
+nnfc_rule --> duplicados: No (NUNCA duplicado)
+nnfc_rule --> consolidar_regla: Consolidar si tipo diferente
 
 duplicados --> consolidar_regla: Tipos DIFERENTES consolidan
 consolidar_regla --> db: Insertar/Actualizar consolidado

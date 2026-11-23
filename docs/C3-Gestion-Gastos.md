@@ -4,7 +4,7 @@
 Sistema de gestión de gastos e ingresos para Android/Termux que procesa notificaciones bancarias.
 
 ### Formatos soportados
-- **TRAN**: Transferencias bancarias (formato: "TRAN S/ X.00\\nA: Nombre")
+- **TRAN**: Transferencias bancarias (formato: "TRAN S/ X.00\nA: Nombre")
 - **PLIN**: Pagos P2P (formato: "Plineaste S/ X.00 a Nombre")
 - **TARJETA**: Consumos con tarjeta (formato: "Realizaste un consumo con tu tarjeta.")
 - **NFC**: Google Pay / Wallet (formato: "S/ X.XX con Nombre ••NNNN")
@@ -15,7 +15,7 @@ Sistema de gestión de gastos e ingresos para Android/Termux que procesa notific
 
 ### Flujo de procesamiento
 1. Recibir notificación
-2. Clasificar formato (TRAN, PLIN, TARJETA, NFC)
+2. Clasificar formato (TRAN, PLIN, TARJETA o NFC)
 3. Validar duplicados
 4. Si es duplicado: consolidar con registro existente
 5. Si no es duplicado: insertar nuevo registro

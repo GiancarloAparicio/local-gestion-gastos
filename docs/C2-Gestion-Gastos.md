@@ -10,7 +10,7 @@ El sistema procesa notificaciones de 4 formatos: TRAN, PLIN, TARJETA, NFC.
 - **Tipos diferentes SÍ consolidan**: Cualquier combinación de tipos diferentes si comparten mismo destinatario + monto similar + ventana 5 min
 
 ### Flujo de trabajo paso a paso
-1. **NOTIFICACIÓN RECIBIDA**: Llegada de notificación del sistema Automate o directo
+1. **NOTIFICACIÓN RECIBIDA**: Llegada de notificación del sistema Automate/FIFO
 2. **VALIDAR PAQUETE**: Verificar que sea paquete conocido (IBK, NFC, Yape, etc.)
 3. **CLASIFICAR FORMATO**: Determinar si es TRAN, PLIN, TARJETA o NFC
 4. **PROCESAR**: Aplicar lógica según el formato clasificado

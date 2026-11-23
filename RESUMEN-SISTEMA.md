@@ -58,7 +58,7 @@ pyyaml >= 6.0
 *(Los demás módulos son Python estándar o archivos locales)*
 
 ### 3. Estructura de Directorios
-```
+```text
 local-gestion-gastos/
 ├── main.py                  # CLI principal
 ├── instalacion.sh           # Script de instalación
@@ -93,26 +93,26 @@ local-gestion-gastos/
 | **PLIN + NFC** | ✅ **SÍ** | Consolidar si mismo destinatario + monto + 5 min |
 | **TARJETA + NFC** | ✅ **SÍ** | Consolidar si mismo destinatario + monto + 5 min |
 
-### 4. Flujo de Procesamiento
+## Flujo de Procesamiento
 
-#### Escenario 1: NFC primero → Interbank TARJETA
+### Escenario 1: NFC primero → Interbank TARJETA
 1. NFC: "S/ 63.67 con Infinite ••9820" → Registrar con motivo
 2. Interbank: "Realizaste un consumo de S/ 63.67 en IZICORRALITO..." → Detectar consolidación → Actualizar registro (NO solicitar nada nuevo)
 
-#### Escenario 2: Interbank TARJETA primero → NFC
+### Escenario 2: Interbank TARJETA primero → NFC
 1. Interbank: "Realizaste un consumo de S/ 63.67 en IZICORRALITO..." → Registrar con motivo
 2. NFC: "S/ 63.67 con Infinite ••9820" → Detectar consolidación → Actualizar registro (NO solicitar nada nuevo)
 
-#### Escenario 3: Mismo tipo (ej. NFC + NFC)
+### Escenario 3: Mismo tipo (ej. NFC + NFC)
 1. NFC primero → Registrar con motivo
 2. NFC segundo → **NUNCA duplicado** → Insertar como registro independiente
 
-#### Escenario 4: Secuencia TRAN → TARJETA → PLIN
+### Escenario 4: Secuencia TRAN → TARJETA → PLIN
 1. TRAN: Registrar con motivo y monto
 2. TARJETA: Monto vacío → Solicitar al usuario → Consolidar con TRAN
 3. PLIN: Consolidar con registro TRAN+TARJETA → Marcar como consolidado
 
-### 5. Comandos de Uso
+## Comandos de Uso
 
 ```bash
 # Instalar entorno
@@ -133,7 +133,7 @@ python3 main.py --accion insertar \
 cat ~/.local_gestion_gastos/app.log
 ```
 
-### 5. Licencia y Mantenimiento
+## Licencia y Mantenimiento
 - **Desarrollador**: local-gestion-gastos
 - **Entorno**: Termux/Linux (Python 3.8+)
 - **Última actualización**: Noviembre 2026
@@ -146,3 +146,5 @@ cat ~/.local_gestion_gastos/app.log
 - ✅ Logging paso a paso en main.py
 - ✅ Script de instalación bash
 - ✅ Actualización de diagramas UML
+- ✅ Actualización de documentación markdown (10+ archivos)
+- ✅ PDFs generados a partir de markdown

@@ -11,7 +11,7 @@
 - **LOGS**: Registro de actividades (logs/app.log)
 
 ### Flujo de datos
-```
+```text
 USUARIO --> MAIN PYTHON --> ADAPTADORES --> BASE DATOS SQLite
                  --> MODULIOS --> Validaciones y utilidades
 BASE DATOS SQLite --> LOGS --> Reportes y vistas de usuario
@@ -70,7 +70,7 @@ cat ~/.local_gestion_gastos/app.log
 ```
 
 ### Formatos de notificación soportados
-- **TRAN**: Transferencias bancarias - "TRAN S/ X.00\\nA: Nombre"
+- **TRAN**: Transferencias bancarias - "TRAN S/ X.00\nA: Nombre"
 - **PLIN**: Pagos P2P - "Plineaste S/ X.00 a Nombre"
 - **TARJETA**: Consumos con tarjeta - "Realizaste un consumo con tu tarjeta."
 - **NFC**: Google Pay - "S/ X.XX con Nombre ••NNNN"
