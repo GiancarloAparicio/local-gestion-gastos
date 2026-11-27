@@ -45,19 +45,21 @@ class YapeAdapter:
         mensaje = datos_crudos.get("content") or datos_crudos.get("message", "")
 
         # 2. Extraer el monto (formato peruano: "S/ X" o "S/ X.XX")
-        monto_match = re.search(r"S/\s*([\d,.]+)", mensaje)
+        monto_match = re.search(r"S/\s*([\d.,]+)", mensaje)
+        monto = 0.0
         if monto_match:
-            monto_str = monto_match.group(1)
-            # En formato Yape, el punto es decimal (S/ 1.00 = 1.00 soles)
+            monto_str = monto_match.group(1).strip()
             try:
-                monto = float(monto_str.replace(".", ""))  # Quitar punto de miles si existe
-                # Asegurar que sea positivo
+                # Si termina en 1-2 decimales, el separador es decimal; si no,
+                # se interpretan como separadores de miles.
+                if re.search(r"[.,]\d{1,2}$", monto_str):
+                    monto = float(monto_str.replace(",", "."))
+                else:
+                    monto = float(monto_str.replace(".", "").replace(",", ""))
                 if monto <= 0:
                     monto = 0.0
             except ValueError:
                 monto = 0.0
-        else:
-            monto = 0.0
 
         # 2. Solicitar destinatario usando termux_api con contexto
         # El destinatario viene después de "Yape! " y antes de " te envió plata"
@@ -127,7 +129,11 @@ class YapeAdapter:
         """
         # Primero intentamos extraer el nombre del mensaje usando regex
         # Formato: "Yape! S/ X.00 a Juan te envió plata"
-        nombre_match = re.search(r"Yape!\s+[S$]\s*[\d,.]+\s+a\s+([A-ZÁÉÍÓÚñ][\wÑ\.\s]{2,40})\s+te\s+envi", mensaje, re.IGNORECASE)
+        nombre_match = re.search(
+            r"Yape!\s+S/\s*[\d.,]+\s+a\s+([A-ZÁÉÍÓÚñ][\wÑ\.\s]{2,40}?)\s+te\s+envi",
+            mensaje,
+            re.IGNORECASE,
+        )
         if nombre_match:
             nombre_extraido = nombre_match.group(1).strip()
             if nombre_extraido and len(nombre_extraido) > 1:

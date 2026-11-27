@@ -254,20 +254,23 @@ class IBKAdapter:
         es_gasto = False
         es_ingreso = False
 
+        # Un consumo con tarjeta o pago NFC siempre es un gasto.
+        if formato_tipo in ("tarjeta", "nfc"):
+            es_gasto = True
         # Formato gasto: "plineaste s/ ..." (usuario envió)
-        if "plineaste" in mensaje_lower:
+        elif "plineaste" in mensaje_lower:
             es_gasto = True
         # Formato ingreso: "... te ha plineado ..." (recibió dinero)
         elif "te ha plineado" in mensaje_lower:
             es_ingreso = True
         else:
-            # Formato legacy o genérico (incluye TRAN, transferencia, etc.)
-            # NOTE: "tran" en minúscula coincide con "TRAN" de los mensajes IBK
-            #      (TRAN se pone en minúscula al hacer .lower())
+            # Formato legacy o genérico (incluye TRAN, transferencia, consumo, etc.)
             es_gasto = (
                 "plineaste" in mensaje_lower
                 or "tran" in mensaje_lower
                 or "transferencia" in mensaje_lower
+                or "consumo" in mensaje_lower
+                or "compra" in mensaje_lower
             )
             es_ingreso = (
                 "abonó" in mensaje_lower or "transferencia recibida" in mensaje_lower

@@ -69,24 +69,28 @@ class NFCAdapter:
             # Si no hay monto en el mensaje, solicitaremos al usuario vía termux_dialog
             monto = None  # Indicaremos que faltó el monto
 
-        # 2. Extraer beneficiario del title (formato: "2446 MASS NISPE25 SMP M")
-        beneficiario = datos_crudos.get("title") or ""
+        # 2. Extraer beneficiario del title (o de extras.android.title)
+        extras = datos_crudos.get("extras") or {}
+        beneficiario = (
+            datos_crudos.get("title")
+            or datos_crudos.get("titulo")
+            or extras.get("android.title")
+            or ""
+        )
 
-        # 3. Determinar tipo de consumo (gasto/ingreso)
-        tipo_consumo = datos_crudos.get("tipo_consumo", "").upper()
-        if tipo_consumo == "GASTO":
-            tipo = "gasto"
-        elif tipo_consumo == "INGRESO":
+        # 3. Determinar tipo de consumo (gasto/ingreso). Los pagos NFC con
+        #    tarjeta son consumos → por defecto gasto.
+        tipo_consumo = str(datos_crudos.get("tipo_consumo", "")).upper()
+        if tipo_consumo == "INGRESO":
             tipo = "ingreso"
+        elif tipo_consumo == "GASTO":
+            tipo = "gasto"
         else:
-            # Revisar en el mensaje si dice "ingreso" o "gasto"
             mensaje_lower = mensaje.lower() if mensaje else ""
             if "ingreso" in mensaje_lower:
                 tipo = "ingreso"
-            elif "gasto" in mensaje_lower or "plineaste" in mensaje_lower:
-                tipo = "gasto"
             else:
-                tipo = "indeterminado"
+                tipo = "gasto"
 
         # 3. Solicitar motivo al usuario vía termux_api con contexto NFC
         # Pasamos el título de la notificación y el nombre de la app para contexto
@@ -96,9 +100,13 @@ class NFCAdapter:
             app_nombre="NFC"
         )
 
-        # 4. Generar event_id UUID
-        notification_id = datos_crudos.get("id", "")
-        if notification_id and notification_id not in ("", "0"):
+        # 4. Generar event_id a partir de notification_id/key, o UUID.
+        notification_id = (
+            datos_crudos.get("notification_id")
+            or datos_crudos.get("key")
+            or datos_crudos.get("id", "")
+        )
+        if notification_id and str(notification_id) not in ("", "0"):
             event_id = str(notification_id)
         else:
             event_id = str(uuid.uuid4())

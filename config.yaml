@@ -15,7 +15,11 @@ modo_operacion: "automate_broker"  # Opciones: "automate_broker" | "listener_dir
 # Bloques completamente definibles aquí. Modo A es el principal.
 automate_broker:
   activado: true
-  directorio_archivos: "/data/data/com.termux/files/home/storage/shared/Documents/noti.json"
+  # RUTA DE UN SOLO ARCHIVO (no un directorio). Automate intercepta cada
+  # notificación y REESCRIBE este mismo archivo; el broker lo lee, lo procesa
+  # y espera la siguiente reescritura (cola FIFO de un solo archivo).
+  # En Termux se usa esta ruta; en Linux se usa ./noti_inbox/noti.json.
+  archivo_notificacion: "/data/data/com.termux/files/home/storage/shared/Documents/noti.json"
   monitoreo_polling_segundos: 5
 
 listener_directo:
@@ -69,9 +73,6 @@ credenciales:
   looker_studio_url: "https://lookerstudio.google.com/reporting/1BxiMVs0XRA5nFMdKvBdBjfbOatIs_cAnmM4BLlIgEY"
   # URL del reporte de Looker Studio que consume la Google Sheet.
   # Cambiar si se crea un reporte nuevo o se migra cuenta.
-
-# --- Directorio de Archivos Automate ---
-directorio_archivos_automate: "/data/data/com.termux/files/home/storage/shared/Documents/noti.json"
 
 # --- Configuración de Termux ---
 termux:

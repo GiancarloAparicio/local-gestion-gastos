@@ -1,260 +1,183 @@
-"""Módulo de proveedor de ubicación GPS.
-Proporciona una interfaz unificada para obtener ubicación en Termux y Linux,
-siempre retornando el mismo formato JSON estandarizado:
-{"code": 0|-1, "data": {"lat": float, "lng": float, "altitud": float|None, "precision": float, "source": str, "timestamp": float}, "raw": "", "valid": true|false, "error": null|str}
+"""Proveedor de ubicación GPS multiplataforma.
+
+- Termux: usa ``termux-location`` (ruta tomada de ``config.termux.path``).
+- Linux: usa geolocalización por IP (ipapi.co / ipinfo.io) como aproximación.
+
+Ambos retornan el mismo sobre JSON estándar:
+    {"code": 0|-1, "data": {"lat": float, "lng": float, "altitud": float|None,
+     "precision": float|None, "source": str, "timestamp": float},
+     "raw": "...", "valid": bool, "error": str|None}
 """
 
 from abc import ABC, abstractmethod
+import json
+import os
 import subprocess
 import time
-import json
-import sqlite3
-import os
+import urllib.request
+import urllib.error
+
+from infraestructura import config
+
+
+def _sobre(code, data=None, raw="", error=None):
+    return {
+        "code": code,
+        "data": data if data is not None else {},
+        "raw": raw,
+        "valid": code == 0,
+        "error": error,
+    }
 
 
 class GPSProvider(ABC):
-    """Provedor abstracto de ubicación GPS."""
-    
+    """Contrato de proveedor GPS."""
+
     @abstractmethod
     def obtener_ubicacion(self) -> dict:
-        """Retorna ubicación actual. Siempre JSON estandarizado."""
-        pass
-    
+        """Ubicación actual (o fallback). Sobre JSON estándar."""
+
     @abstractmethod
     def ultimo_conocido(self) -> dict:
-        """Retorna última ubicación guardada en historial."""
+        """Última ubicación registrada en la base de datos."""
+
+
+def _ultima_ubicacion_db() -> dict | None:
+    """Lee la última ubicación válida desde la BD configurada."""
+    import sqlite3
+
+    try:
+        conexion = sqlite3.connect(config.ruta_db())
+        conexion.row_factory = sqlite3.Row
+        cursor = conexion.cursor()
+        cursor.execute(
+            "SELECT latitud, longitud, fuente_gps, fecha_hora_epoch "
+            "FROM transacciones WHERE latitud IS NOT NULL AND longitud IS NOT NULL "
+            "ORDER BY fecha_hora_epoch DESC LIMIT 1"
+        )
+        fila = cursor.fetchone()
+        conexion.close()
+        if fila:
+            return {
+                "lat": float(fila["latitud"]),
+                "lng": float(fila["longitud"]),
+                "altitud": None,
+                "precision": None,
+                "source": "sqlite-history",
+                "timestamp": float(fila["fecha_hora_epoch"] or time.time()),
+            }
+    except Exception:
         pass
+    return None
 
 
 class TermuxGPSProvider(GPSProvider):
-    """Implementación para Termux usando termux-location"""
-    
-    def _ejecutar_termux_location(self, timeout: int = 15) -> dict:
-        """Ejecuta termux-location y parsea output a JSON estandarizado"""
+    """GPS real vía ``termux-location`` dentro de Termux."""
+
+    def _bin(self, nombre: str) -> str:
+        return os.path.join(config.termux_bin(), nombre)
+
+    def obtener_ubicacion(self) -> dict:
+        timeout = config.timeout_gps()
+        cmd = self._bin("termux-location")
         try:
-            result = subprocess.run(
-                ["termux-location", "gps"],
+            resultado = subprocess.run(
+                [cmd, "-p", "gps", "-r", "once"],
                 capture_output=True,
                 text=True,
-                timeout=timeout
+                timeout=timeout + 5,
             )
-            
-            output = result.stdout.strip()
-            
-            parsed = self._parsear_output(output)
-            
-            # Siempre retornar estructura consistente: code en raíz, data dentro
-            return {
-                "code": 0 if parsed else -1,
-                "data": parsed if parsed else {},
-                "raw": output,
-                "valid": parsed is not None,
-                "error": None if parsed else "fallo_parsing_termux_location"
-            }
-        except subprocess.TimeoutExpired:
-            return {
-                "code": -1,
-                "data": {},
-                "raw": "",
-                "valid": False,
-                "error": "timeout_expirado_termux_location"
-            }
-        except Exception as e:
-            return {
-                "code": -1,
-                "data": {},
-                "raw": str(e),
-                "valid": False,
-                "error": str(e)
-            }
-    
-    def _parsear_output(self, output: str) -> dict | None:
-        """Parsea output de termux-location a dict estandarizado"""
-        try:
-            # Intentar JSON primero
-            if output.startswith("{"):
-                data = json.loads(output)
-                return {
-                    "lat": float(data.get("latitude", data.get("lat", 0))),
-                    "lng": float(data.get("longitude", data.get("lng", 0))),
-                    "altitud": float(data.get("altitud", data.get("altitude"))) if (
-                        data.get("altitud") or data.get("altitude")
-                    ) else None,
-                    "precision": float(data.get("accuracy", data.get("precision", 0))),
-                    "source": "termux-location",
-                    "timestamp": float(data.get("timestamp", time.time()))
-                }
-            
-            # Parsear valores separados por línea (termux-location a veces output así)
-            lines = [l.strip() for l in output.split("\n") if l.strip()]
-            if len(lines) >= 2:
+            salida = (resultado.stdout or "").strip()
+            if resultado.returncode == 0 and salida:
                 try:
-                    return {
-                        "lat": float(lines[0]),
-                        "lng": float(lines[1]),
-                        "altitud": float(lines[2]) if len(lines) > 2 else None,
-                        "precision": float(lines[3]) if len(lines) > 3 else None,
-                        "source": "termux-location",
-                        "timestamp": time.time()
-                    }
-                except (ValueError, IndexError):
+                    datos = json.loads(salida)
+                    lat = datos.get("latitude", datos.get("lat"))
+                    lng = datos.get("longitude", datos.get("lon"))
+                    if lat is not None and lng is not None:
+                        return _sobre(
+                            0,
+                            {
+                                "lat": float(lat),
+                                "lng": float(lng),
+                                "altitud": datos.get("altitude"),
+                                "precision": datos.get("accuracy"),
+                                "source": "termux-location",
+                                "timestamp": time.time(),
+                            },
+                            raw=salida,
+                        )
+                except (json.JSONDecodeError, ValueError):
                     pass
-            
-        except (json.JSONDecodeError, ValueError, IndexError) as e:
+        except FileNotFoundError:
             pass
-        
-        return None
-    
-    def obtener_ubicacion(self) -> dict:
-        """Obtener ubicación actual en tiempo real via termux-location"""
-        return self._ejecutar_termux_location(timeout=10)
-    
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception:
+            pass
+
+        # Fallback: última ubicación de la BD
+        ultimo = _ultima_ubicacion_db()
+        if ultimo:
+            return _sobre(0, ultimo, raw="fallback BD")
+        return _sobre(-1, raw="termux-location no disponible", error="gps_no_disponible")
+
     def ultimo_conocido(self) -> dict:
-        """Obtener última ubicación de SQLite o archivo de caché en Termux"""
-        # En Termux, leeríamos de la tabla de historial de GPS en SQLite
-        # Por ahora retornar estructura indicando que requiere BD
-        return {
-            "code": -1,
-            "data": {},
-            "raw": "ultimo_conocido_requiere_consulta_sqlite",
-            "valid": False,
-            "error": "ultimo_conocido_requiere_base_datos"
-        }
+        ultimo = _ultima_ubicacion_db()
+        if ultimo:
+            return _sobre(0, ultimo, raw="última ubicación BD")
+        return _sobre(-1, raw="sin ubicaciones", error="sin_ubicaciones")
 
 
 class LinuxGPSProvider(GPSProvider):
-    """Implementación para Linux standard usando Python y geolocalización por IP"""
-    
-    def _obtener_por_ip_geolocation(self) -> dict | None:
-        """Obtener ubicación por IP usando ipapi.co o similar"""
-        try:
-            import urllib.request
-            url = "https://ipapi.co/json/"
-            with urllib.request.urlopen(url, timeout=10) as response:
-                data = json.loads(response.read().decode('utf-8'))
-                return {
-                    "lat": float(data.get("latitude", 0)),
-                    "lng": float(data.get("longitude", 0)),
-                    "altitud": None,  # IP geolocation no da altitud
-                    "precision": float(data.get("accuracy", 0)),
-                    "source": "ip-api",
-                    "timestamp": time.time()
-                }
-        except ImportError:
-            pass
-        except Exception as e:
-            # Si falla, continuar con método alternativo
-            pass
-        return None
-    
-    def _obtener_ultimo_conocido_sqlite(self) -> dict | None:
-        """Obtener última ubicación de SQLite en Linux"""
-        db_path = os.path.expanduser("~/local_gastos.db")
-        try:
-            conexion = sqlite3.connect(db_path)
-            cursor = conexion.cursor()
-            
-            # Intentar leer última ubicación de la tabla de transacciones
+    """GPS aproximado por IP para equipos Linux sin hardware GPS."""
+
+    _SERVICIOS = (
+        "https://ipapi.co/json/",
+        "https://ipinfo.io/json",
+    )
+
+    def _por_ip(self) -> dict | None:
+        for url in self._SERVICIOS:
             try:
-                cursor.execute(
-                    "SELECT latitud, longitud, fecha_hora_epoch FROM transacciones "
-                    "WHERE latitud IS NOT NULL AND longitud IS NOT NULL "
-                    "ORDER BY fecha_hora_epoch DESC LIMIT 1"
-                )
-                fila = cursor.fetchone()
-                if fila:
+                with urllib.request.urlopen(url, timeout=10) as respuesta:
+                    datos = json.loads(respuesta.read().decode("utf-8"))
+                # ipinfo devuelve 'loc' = "lat,lng"
+                if "loc" in datos and "," in str(datos["loc"]):
+                    lat_s, lng_s = str(datos["loc"]).split(",", 1)
+                    lat, lng = float(lat_s), float(lng_s)
+                else:
+                    lat = float(datos.get("latitude", datos.get("lat", 0)))
+                    lng = float(datos.get("longitude", datos.get("lng", 0)))
+                if lat or lng:
                     return {
-                        "lat": float(fila[0]),
-                        "lng": float(fila[1]),
+                        "lat": lat,
+                        "lng": lng,
                         "altitud": None,
-                        "precision": None,
-                        "source": "sqlite-history",
-                        "timestamp": float(fila[2]) if fila[2] else time.time()
+                        "precision": datos.get("accuracy"),
+                        "source": "ip-geolocation",
+                        "timestamp": time.time(),
                     }
-            except sqlite3.OperationalError:
-                pass  # Tabla puede no existir aún
-            
-            conexion.close()
-        except Exception:
-            pass
-        
+            except (urllib.error.URLError, urllib.error.HTTPError):
+                continue
+            except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                continue
         return None
-    
+
     def obtener_ubicacion(self) -> dict:
-        """Obtener ubicación actual en Linux"""
-        # Primero intentar IP geolocation
-        resultado = self._obtener_por_ip_geolocation()
-        if resultado:
-            # Estructurar consistentemente con code en raíz y data
-            return {
-                "code": 0,
-                "data": resultado,
-                "raw": "ip_geolocation_success",
-                "valid": True,
-                "error": None
-            }
-        
-        # Fallback: último conocido de SQLite
-        resultado_sqlite = self._obtener_ultimo_conocido_sqlite()
-        if resultado_sqlite:
-            return {
-                "code": 0,
-                "data": resultado_sqlite,
-                "raw": "from_sqlite_history",
-                "valid": True,
-                "error": None
-            }
-        
-        # Sin GPS disponible - estructura consistente
-        return {
-            "code": -1,
-            "data": {},
-            "raw": "no_hay_gps_hardware_en_pc_ni_datos_sqlite",
-            "valid": False,
-            "error": "gps_no_disponible_en_este_equipo"
-        }
-    
+        ubicacion = self._por_ip()
+        if ubicacion:
+            return _sobre(0, ubicacion, raw="geolocalización por IP")
+        ultimo = _ultima_ubicacion_db()
+        if ultimo:
+            return _sobre(0, ultimo, raw="fallback BD")
+        return _sobre(
+            -1,
+            raw="sin GPS ni ubicaciones previas",
+            error="gps_no_disponible",
+        )
+
     def ultimo_conocido(self) -> dict:
-        """Última ubicación guardada en SQLite en Linux"""
-        db_path = os.path.expanduser("~/local_gastos.db")
-        try:
-            conexion = sqlite3.connect(db_path)
-            cursor = conexion.cursor()
-            
-            try:
-                cursor.execute(
-                    "SELECT latitud, longitud, fecha_hora_epoch FROM transacciones "
-                    "WHERE latitud IS NOT NULL AND longitud IS NOT NULL "
-                    "ORDER BY fecha_hora_epoch DESC LIMIT 1"
-                )
-                fila = cursor.fetchone()
-                if fila:
-                    conexion.close()
-                    return {
-                        "code": 0,
-                        "data": {
-                            "lat": float(fila[0]),
-                            "lng": float(fila[1]),
-                            "altitud": None,
-                            "precision": None,
-                            "source": "sqlite-history",
-                            "timestamp": float(fila[2]) if fila[2] else time.time()
-                        },
-                        "raw": "from_sqlite_history",
-                        "valid": True,
-                        "error": None
-                    }
-            except sqlite3.OperationalError:
-                pass
-            
-            conexion.close()
-        except Exception:
-            pass
-        
-        return {
-            "code": -1,
-            "data": {},
-            "raw": "no_hay_datos_en_sqlite",
-            "valid": False,
-            "error": "no_hay_ubicaciones_guardadas"
-        }
+        ultimo = _ultima_ubicacion_db()
+        if ultimo:
+            return _sobre(0, ultimo, raw="última ubicación BD")
+        return _sobre(-1, raw="sin ubicaciones", error="sin_ubicaciones")

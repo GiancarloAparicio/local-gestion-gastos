@@ -39,46 +39,65 @@ class BBVAAdapter:
         los datos completos ya que el mensaje no los contiene explícitamente.
         En este adaptador, solicitamos todos los datos vía termux_api con contexto."""
 
-        # 1. Solicitar tipo de movimiento (ingreso/gasto) con contexto BBVA
-        # Pasamos el título de la notificación y el nombre de la app para contexto
+        # 1. Obtener el mensaje y determinar el tipo por palabras clave.
+        mensaje = datos_crudos.get("content") or datos_crudos.get("message", "")
+        mensaje_lower = mensaje.lower()
         titulo_notificacion = datos_crudos.get("title", datos_crudos.get("titulo", ""))
-        tipo = termux_api.solicitar_motivo_contexto(
-            es_gasto=False,
-            titulo_notificacion=titulo_notificacion,
-            app_nombre="BBVA"
-        )
 
-        # 2. Solicitar monto vía termux_dialog (widget counter para números)
-        monto_respuesta = termux_api.mostrar_dialogo(
-            widget="counter",
-            titulo="Monto BBVA",
-            mensaje="¿Cuál es el monto? (en soles, ej. 20.00)",
-            r="1,10000,1",
-        )
+        if any(p in mensaje_lower for p in ("abono", "ingreso", "recibiste", "te depositaron")):
+            tipo = "ingreso"
+        elif any(p in mensaje_lower for p in ("consumo", "pago", "compra", "gasto", "debito")):
+            tipo = "gasto"
+        else:
+            tipo = "gasto"
+
+        # 2. Intentar extraer el monto del propio mensaje.
         monto = 0.0
-        if monto_respuesta and "r" in monto_respuesta:
+        monto_match = re.search(r"S/\s*([\d.,]+)", mensaje)
+        if monto_match:
+            monto_str = monto_match.group(1).strip()
             try:
-                monto = float(monto_respuesta["r"])
+                if re.search(r"[.,]\d{1,2}$", monto_str):
+                    monto = float(monto_str.replace(",", "."))
+                else:
+                    monto = float(monto_str.replace(".", "").replace(",", ""))
             except ValueError:
                 monto = 0.0
-        elif monto_respuesta and "text" in monto_respuesta:
-            try:
-                monto = float(monto_respuesta["text"])
-            except ValueError:
-                monto = 0.0
-        # Asegurar que sea positivo
-        if monto is not None and monto <= 0:
-            monto = 0.0
 
-        # 3. Solicitar destinatario vía termux_dialog
-        destinatario_respuesta = termux_api.mostrar_dialogo(
-            widget="text",
-            titulo="Destinatario BBVA",
-            mensaje="¿Quién es el persona o comercio? ",
-        )
-        destinatario = destinatario_respuesta["text"].strip() if destinatario_respuesta and "text" in destinatario_respuesta else "por definir"
-        if not destinatario:
-            destinatario = "por definir"
+        # Si el mensaje no trae monto, solicitarlo vía termux-dialog (solo Termux).
+        if monto <= 0:
+            monto_respuesta = termux_api.mostrar_dialogo(
+                widget="counter",
+                titulo="Monto BBVA",
+                mensaje="¿Cuál es el monto? (en soles, ej. 20.00)",
+                r="1,10000,1",
+            )
+            if monto_respuesta and "r" in monto_respuesta:
+                try:
+                    monto = float(monto_respuesta["r"])
+                except ValueError:
+                    monto = 0.0
+            elif monto_respuesta and "text" in monto_respuesta:
+                try:
+                    monto = float(monto_respuesta["text"])
+                except ValueError:
+                    monto = 0.0
+
+        # 3. Extraer destinatario del mensaje; si no, solicitarlo (solo Termux).
+        destinatario = "por definir"
+        nombre_match = re.search(r"(?:a|en)\s+([A-ZÁÉÍÓÚÑ][\wÑ\.\s]{2,40})", mensaje)
+        if nombre_match:
+            destinatario = nombre_match.group(1).strip().rstrip(".!,;:")
+        else:
+            destinatario_respuesta = termux_api.mostrar_dialogo(
+                widget="text",
+                titulo="Destinatario BBVA",
+                mensaje="¿Quién es la persona o comercio? ",
+            )
+            if destinatario_respuesta and "text" in destinatario_respuesta:
+                posible = destinatario_respuesta["text"].strip()
+                if posible:
+                    destinatario = posible
 
         # 3. Solicitar motivo vía termux_api con contexto
         motivo = termux_api.solicitar_motivo_contexto(

@@ -9,10 +9,27 @@ from typing import Optional, Dict, Any, List
 class SQLiteAdapter:
     """Adaptador de base de datos SQLite para el sistema local-gestion-gastos."""
 
-    def __init__(self, db_ruta: str = "local_gastos.db"):
+    def __init__(self, db_ruta: str = None, ruta: str = None):
+        # 'ruta' se acepta como alias retrocompatible de 'db_ruta'.
+        if db_ruta is None:
+            db_ruta = ruta
+        if db_ruta is None:
+            try:
+                from infraestructura import config
+                db_ruta = config.ruta_db()
+            except Exception:
+                db_ruta = "local_gastos.db"
         self.db_ruta = db_ruta
         self._conexion = None
         self._inicializar_bd()
+
+    def cerrar_conexion(self):
+        """Cierra la conexión activa si existe."""
+        if self._conexion is not None:
+            try:
+                self._conexion.close()
+            finally:
+                self._conexion = None
 
     def _obtener_conexion(self):
         """Obtiene o crea la conexión, asegurando que esté abierta."""

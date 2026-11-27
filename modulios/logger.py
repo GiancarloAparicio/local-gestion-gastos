@@ -11,11 +11,33 @@ Ejemplo de uso:
 """
 
 import logging
+import logging.handlers
 import os
 import sys
 import yaml
 from datetime import datetime
 from pathlib import Path
+
+
+def _parsear_bytes(valor) -> int:
+    """Convierte '10 MB', '500 KB', '1 GB' o '0' a bytes. 0 = sin rotación."""
+    if valor is None:
+        return 0
+    texto = str(valor).strip().upper()
+    if texto in ("", "0", "NONE", "OFF"):
+        return 0
+    numero = "".join(c for c in texto if c.isdigit() or c == ".")
+    multiplicador = 1
+    if "KB" in texto:
+        multiplicador = 1024
+    elif "MB" in texto:
+        multiplicador = 1024 ** 2
+    elif "GB" in texto:
+        multiplicador = 1024 ** 3
+    try:
+        return int(float(numero) * multiplicador)
+    except (TypeError, ValueError):
+        return 0
 
 # Cargar configuración de logging desde config.yaml
 RUTA_CONFIG = Path(__file__).parent.parent / "config.yaml"
@@ -29,6 +51,7 @@ try:
     LOG_DATE_FORMAT = LOG_CONFIG.get('datefmt', "%Y-%m-%d %H:%M:%S")
 except Exception:
     # Fallbacks si config.yaml no está disponible
+    LOG_CONFIG = {}
     LOG_LEVEL = logging.INFO
     LOG_ARCHIVO = Path("./logs/app.log")
     LOG_FORMAT_STR = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -94,24 +117,27 @@ def setup_logger(
     # Limpiar handlers existentes
     logger.handlers = []
     
-    # Handler de archivo (siempre escritura)
+    # Handler de archivo (con rotación según config.yaml → logging.rotacion)
     try:
-        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        max_bytes = _parsear_bytes(LOG_CONFIG.get('rotacion', 0))
+        if max_bytes > 0:
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_file, maxBytes=max_bytes, backupCount=3, encoding='utf-8'
+            )
+        else:
+            file_handler = logging.FileHandler(log_file, encoding='utf-8')
         file_handler.setLevel(level)
-        file_formatter = logging.Formatter(format_str, datefmt)
-        file_handler.setFormatter(file_formatter)
+        file_handler.setFormatter(logging.Formatter(format_str, datefmt))
         logger.addHandler(file_handler)
     except (PermissionError, FileNotFoundError) as e:
         print(f"⚠️ No se pudo crear archivo de log: {e}")
-    
-    # Handler de consola (solo si es TTY)
-    if sys.stdout.isatty():
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(level)
-        console_formatter = ColoredFormatter(format_str, datefmt)
-        console_handler.setFormatter(console_formatter)
-        logger.addHandler(console_handler)
-    
+
+    # Handler de consola (siempre, para ver el progreso)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(level)
+    console_handler.setFormatter(ColoredFormatter(format_str, datefmt))
+    logger.addHandler(console_handler)
+
     return logger
 
 

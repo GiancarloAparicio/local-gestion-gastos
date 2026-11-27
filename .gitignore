@@ -171,6 +171,11 @@ poetry.toml
 .ruff_cache/
 local_gastos.db
 
+# Estado runtime del broker (huella del último archivo procesado)
+.broker_state.json
+# Bandeja de entrada de notificaciones (archivo único reescrito por Automate)
+#noti_inbox/
+
 # LSP config files
 pyrightconfig.json
 

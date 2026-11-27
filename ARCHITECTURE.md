@@ -130,14 +130,39 @@ La Arquitectura Hexagonal (Ports and Adapters) está aplicada en la capa de proc
 
 El sistema debe soportar DOS formas de captura de notificaciones, seleccionables desde el archivo `config.yaml`:
 
-### Modo A: Automate File Broker
-**Descripción:** El flujo principal actual donde Automate (Android) captura las notificaciones del banco y las escribe en un directorio configurado. Termux/Python procesa los archivos de este directorio en orden FIFO.
+### Modo A: Automate File Broker (archivo único reescrito)
 
-**Funcionamiento:** Automate detecta notificaciones push del banco y las guarda como archivos en un directorio específico. Termux detecta estos archivos nuevos y los procesa mediante su pipeline interno, enrutando cada una al adaptador bancario correspondiente, validando duplicados en ventana de tiempo, solicitando motivo al usuario si es necesario, obteniendo ubicación GPS y registrando la transacción en SQLite.
+**Descripción:** El flujo principal. Automate (Android) captura cada notificación del banco y la escribe en **un único archivo JSON** (`noti.json`). En cada notificación, Automate **reescribe el mismo archivo**. Termux/Python detecta el cambio, lo procesa y espera la siguiente reescritura (cola FIFO de un solo archivo).
 
-**Ventajas:** Ya probado y funcional en el proyecto; Automate captura notificaciones incluso cuando la app está cerrada; depuración más fácil al revisar los archivos en el directorio; compatible con la ventana de consolidación y el flujo FIFO existente.
+**Rutas del archivo:**
+- **Termux:** `config.yaml` → `automate_broker.archivo_notificacion`
+  (por defecto `/data/data/com.termux/files/home/storage/shared/Documents/noti.json`).
+- **Linux:** `./noti_inbox/noti.json` (siempre, para desarrollo/pruebas).
 
-**Desventajas:** Dependencia de que Automate escriba correctamente los archivos en el directorio configurado; implica un paso adicional en el flujo (automate → archivo → Termux).
+**Detección de cambios e idempotencia:**
+- Se calcula una huella `(mtime_ns, tamaño, SHA-1 del contenido)`.
+- Si no cambió respecto a la última procesada (persistida en `.broker_state.json`),
+  no se reprocesa (evita duplicados tras reinicios).
+- Si el JSON está incompleto (escritura en curso), **no** se marca: se reintenta
+  en el siguiente ciclo de polling.
+- Al terminar el procesamiento, **el archivo `noti.json` se elimina** (Automate lo
+  recrea en la siguiente notificación). Si hay un error grave (crudo/BD), se
+  conserva para reintento.
+
+**Funcionamiento:** Automate escribe la notificación → el broker detecta el cambio →
+lee y valida el JSON → **registra el crudo tal cual en `notificaciones_crudas`** →
+enruta al adaptador del banco según `package`/`packageName` → normaliza (monto, tipo,
+destinatario, event_id) → **pregunta los datos faltantes** (monto/tipo/destinatario/
+motivo) usando `termux-dialog` en Termux o `input()` en Linux → reglas de duplicados/
+consolidación → obtiene GPS (live/último conocido/none) → **solo si cumple todas las
+reglas** inserta en `transacciones` (`sincronizado=0`) → actualiza el crudo a
+`procesada` → elimina el archivo. Logs en `./logs/app.log`.
+
+**Ventajas:** Automate captura notificaciones incluso con la app cerrada; flujo simple
+de auditar (un solo archivo); FIFO natural por reescritura; idempotente entre reinicios.
+
+**Desventajas:** Depende de que Automate reescriba correctamente el archivo; un paso
+adicional (automate → archivo → Termux); requiere polling.
 
 ### Modo B: Listener Directo
 **Descripción:** Forma alternativa de captura donde Termux/Python escucha notificaciones push nativas de Android directamente, sin necesidad de que Automate escriba archivos intermedios.
@@ -149,7 +174,7 @@ El sistema debe soportar DOS formas de captura de notificaciones, seleccionables
 **Desventajas:** Requiere configuración adicional en Android (permissions, manifest, librerías); mayor consumo de batería al estar siempre escuchando notificaciones; más complejo de depurar en dispositivo real; Automate ya está instalado y configurado, no se necesita código extra en la app.
 
 ### Configuración del Modo
-La selección del modo de operación se define en `config.yaml` mediante la propiedad `modo_operacion`. También se pueden configurar parámetros específicos para cada modo, como el directorio de archivos para el modo Automate o el intervalo de polling y la librería a usar para el modo Listener Directo.```
+La selección del modo de operación se define en `config.yaml` mediante la propiedad `modo_operacion`. Para el modo Automate se configura la ruta del **archivo único** (`automate_broker.archivo_notificacion`) y el intervalo de polling (`monitoreo_polling_segundos`); para el modo Listener Directo, el intervalo del bucle y la librería a usar.
 
 ---
 
