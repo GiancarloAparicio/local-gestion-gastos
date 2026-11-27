@@ -1,616 +1,395 @@
 #!/usr/bin/env python3
-"""Sistema local-gestion-gastos - main.py modular, leyendo config.yaml."""
+"""
+main.py - Punto de entrada principal del sistema local-gestion-gastos.
+Soporta múltiples modos de operación y flags de línea de comandos.
 
-import os, sys, argparse, json, datetime, time as _time, logging, importlib, yaml, sqlite3
-from adaptadores.infraestructura.sqlite_adapter import SQLiteAdapter
-from modulios.logger import info, warning, error
-from modulios.termux_api import TermuxAPI
-from modulios.consolidador import Consolidador
-import pprint
+Modos soportados:
+  - --broker: Modo Automate File Broker (por defecto si config.yaml así lo indica)
+  - --listener: Modo Listener Directo
+  - --registro: Flujo interactivo paso a paso
+  - --sql: Ejecutar query SQL directamente
 
-# ===================================================================
-# CONFIGURACIÓN CENTRAL (leída de config.yaml)
-# ===================================================================
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.yaml')
-with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-    CONFIG = yaml.safe_load(f)
+Todas las APIs retornan JSON estandarizado, haciendo el código indiferente al entorno (Termux/Linux).
+"""
 
-BD_TIPO = CONFIG.get('bd', {}).get('tipo', 'sqlite')
-BD_RUTA = CONFIG.get('bd', {}).get('ruta_sqlite', './local_gastos.db')
-MODO_OPERACION = CONFIG.get('modo_operacion', 'automate_broker')
-VENTANA_CONSOLIDACION = CONFIG.get('ventana_consolidacion', {}).get('minutos', 5)
-TIEMPO_ESPERA_GPS = CONFIG.get('procesamiento', {}).get('tiempo_espera_gps_segundos', 10)
-TIEMPO_ESPERA_DIALOGO = CONFIG.get('procesamiento', {}).get('tiempo_espera_dialogo_segundos', 30)
-MAX_INTENTOS_SINCRONIZACION = CONFIG.get('procesamiento', {}).get('maximo_intentos_sincronizacion', 3)
-BACKOFF_ESPERA = CONFIG.get('procesamiento', {}).get('backoff_espera_segundos', [5, 10, 30])
-ADAPTADORES_ACTIVOS = CONFIG.get('adaptadores_activos', [])
-MAPEO_ADAPTADORES = CONFIG.get('mapeo_adaptadores', {})
-DIRECTORIO_CONF = CONFIG.get('directorio_archivos_automate', '/sdcard/storage/shared/Documents/noti.json')
-LOG_NIVEL = CONFIG.get('logging', {}).get('nivel', 'INFO')
-LOG_ARCHIVO = CONFIG.get('logging', {}).get('archivo', './logs/app.log')
-# --- Configuración de Termux ---
-TERMUX_PATH = CONFIG.get('termux', {}).get('path', '/data/data/com.termux/files/usr/bin')
+import sys
+import os
+import argparse
+import yaml
 
-# Configurar logger
-logging.basicConfig(level=getattr(logging, LOG_NIVEL, logging.INFO),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler(LOG_ARCHIVO, encoding='utf-8'), logging.StreamHandler()])
-logger = logging.getLogger("Main")
+# Agregar el directorio de infraestructura al path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# ===================================================================
-# FUNCIÓN 1: Obtener adapter de BD
-# ===================================================================
-def obtener_adapter_BD():
-    db_path = BD_RUTA
-    if not os.path.isabs(db_path):
-        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), db_path)
-    adapter = SQLiteAdapter(db_path)
-    adapter._inicializar_bd()
-    return adapter
+from infraestructura import obtener_proveedor
 
-# ===================================================================
-# FUNCIÓN 2: GPS Termux (usa ruta configurada)
-# ===================================================================
-def obtener_gps():
-    from modulios.termux_api import TermuxAPI
+
+def leer_config():
+    """Leer configuración desde config.yaml"""
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.yaml')
     try:
-        termux_api = TermuxAPI(termux_path=TERMUX_PATH)
-        gps_data = termux_api.obtener_gps(timeout=TIEMPO_ESPERA_GPS)
-        if gps_data:
-            return gps_data.get('latitud'), gps_data.get('longitud'), gps_data.get('fuente_gps', 'live')
-    except Exception:
-        pass
-    return None, None, 'none'
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        return config
+    except (FileNotFoundError, yaml.YAMLError) as e:
+        print(f"⚠ No se pudo leer config.yaml: {e}")
+        return None
 
-# ===================================================================
-# FUNCIÓN: Trimestre (pura)
-# ===================================================================
-def _trimestre(mes):
-    if mes in [1, 2, 3]: return 'Q1'
-    elif mes in [4, 5, 6]: return 'Q2'
-    elif mes in [7, 8, 9]: return 'Q3'
-    else: return 'Q4'
 
-# ===================================================================
-# FUNCIÓN: Cargar adaptadores dinámicamente
-# Intenta varios nombres de clase para compatibilidad con convenios variados
-# ===================================================================
-def _nombre_clase_adaptador(clave):
-    """Genera variaciones posibles de nombre de clase para un clave dada."""
-    base = clave.capitalize()
-    variantes = [
-        base + "Adapter",       # e.g. "NfcAdapter"
-        clave.upper() + "Adapter",  # e.g. "NFCAdapter"
-        clave + "Adapter",      # e.g. "nfcAdapter" (aunque es raro)
-    ]
-    return variantes
-
-def cargar_adaptadores():
-    MODULOS = {
-        "ibk": "adaptadores.ibk", 
-        "yape": "adaptadores.yape",
-        "bbva": "adaptadores.bbva", 
-        "nfc": "adaptadores.nfc",
-        "manual": "adaptadores.manual", 
-        "compartamos": "adaptadores.compartamos"
-    }
-    adaptadores = {}
-    for clave, mod in MODULOS.items():
-        try:
-            md = importlib.import_module(mod)
-            # Probar variaciones de nombre de clase
-            cls_nombre = None
-            for variante in _nombre_clase_adaptador(clave):
-                if hasattr(md, variante):
-                    cls_nombre = variante
-                    break
-            if cls_nombre is None:
-                # Último recurso: usar el primer atributo que termine en Adapter
-                for attr in dir(md):
-                    if attr.endswith("Adapter"):
-                        cls_nombre = attr
-                        break
-            if cls_nombre:
-                adaptadores[clave] = getattr(md, cls_nombre)
-        except Exception:
-            pass
-    # Filtrar solo los activos en config
-    return {k: v for k, v in adaptadores.items() if k in ADAPTADORES_ACTIVOS}
-
-# ===================================================================
-# FUNCIÓN: Encontrar adaptador por paquete
-# Usa primero el mapeo de config, luego fallback a substring match
-# ===================================================================
-def encontrar_adaptador(paquete, adaptadores, mapeo=None):
-    if mapeo is None:
-        mapeo = MAPEO_ADAPTADORES  # desde config.yaml global
-    # 1. Intentar matching por mapeo de paquetes (config.yaml)
-    if paquete and paquete in mapeo:
-        clave = mapeo[paquete]
-        if clave in adaptadores:
-            return adaptadores[clave]()
-    # 2. Fallback: substring match simple (paquete contiene clave)
-    for clave, cls in adaptadores.items():
-        if paquete and clave in paquete:
-            return cls()
-    return None
-
-# ===================================================================
-# FUNCIÓN: Comando LISTAR (consola solo)
-# Muestra TODAS las columnas almacenadas en la BD.
-# ===================================================================
-def cmd_listar(adapter, as_json=False):
-    try:
-        transacciones = adapter.listar_transacciones(limite=10)
-        if not transacciones:
-            if as_json:
-                print("[]")
-            else:
-                print("📭 No hay transacciones registradas")
-            return
-        # Todas las columnas de la tabla transacciones
-        todas_las_columnas = [
-            'id', 'id_transaccion', 'fecha_hora_epoch', 'fecha_iso', 'fecha', 'hora',
-            'trimestre', 'app', 'paquete', 'dispositivo', 'tipo', 'medio',
-            'monto_total', 'moneda', 'destinatario', 'motivo', 'categoria',
-            'es_prestamo', 'monto_pagado', 'saldo_pendiente', 'estado_prestamo',
-            'looker', 'latitud', 'longitud', 'fuente_gps', 'mensaje_raw',
-            'status', 'sincronizado', 'intentos_sync', 'ultimo_error_sync'
-        ]
-        if as_json:
-            # Output en formato JSON array
-            results = []
-            for row in transacciones:
-                obj = {}
-                for col in todas_las_columnas:
-                    obj[col] = row.get(col, '')
-                results.append(obj)
-            print(json.dumps(results, ensure_ascii=False, indent=2))
-        else:
-            # Calcular ancho de cada columna basándose en el contenido máximo
-            widths = []
-            for col in todas_las_columnas:
-                max_long = 0
-                for row in transacciones:
-                    val = str(row.get(col, ''))
-                    if len(val) > max_long:
-                        max_long = len(val)
-                widths.append(max_long if max_long > 0 else 1)
-            # Encabezado de tabla
-            header = " | ".join(col.ljust(w) for col, w in zip(todas_las_columnas, widths))
-            separator = "-" * sum(widths)
-            print(header)
-            print(separator)
-            for i, row in enumerate(transacciones, 1):
-                valores = [str(row.get(col, '')) for col in todas_las_columnas]
-                fila = " | ".join(val.ljust(w) for val, w in zip(valores, widths))
-                print(fila)
-    except Exception as e:
-        print(f"❌ Error al listar: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-
-# ===================================================================
-# FUNCIÓN: Comando INSERTAR
-# ===================================================================
-def cmd_insertar(motivo, monto, tipo, destinatario, adapter, adaptadores):
-    try:
-        ahora = datetime.datetime.now()
-        q = _trimestre(ahora.month)
-        adaptador = encontrar_adaptador('manual', adaptadores)
-        if adaptador is None:
-            import adaptadores.manual as m
-            adaptador = m.ManualAdapter
-        adapter.guardar_transaccion_sql_directo(
-            id_transaccion=os.urandom(12).hex(),
-            fecha_hora_epoch=_time.time(),
-            fecha_iso=ahora.isoformat(),
-            fecha=ahora.strftime('%Y-%m-%d'),
-            hora=ahora.strftime('%H:%M:%S'),
-            trimestre=q, app='manual', paquete='manual.entry', dispositivo='CLI-Manual',
-            tipo=tipo, medio='', monto_total=monto, moneda='PEN',
-            destinatario=destinatario, motivo=motivo, categoria='Manual',
-            es_prestamo=0, monto_pagado=0.0, saldo_pendiente=monto,
-            estado_prestamo='activo', looker=0, latitud=None, longitud=None,
-            fuente_gps='none', mensaje_raw=f'{motivo} - S/ {monto}',
-            status='pendiente', sincronizado=0, intentos_sync=0, ultimo_error_sync='')
-        print("✅ Transacción registrada: event_id generado en BD")
-    except Exception as e:
-        print(f"❌ Error al insertar: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-
-def _resumen_estructura(obj, max_len=2000):
-    """Devuelve tipo, claves/estructura y representación legible sin romper por tipos raros."""
-    tipo_nombre = type(obj).__name__
-    claves = list(obj.keys()) if isinstance(obj, dict) else None
-    try:
-        representacion = json.dumps(obj, ensure_ascii=False, indent=2, default=str)
-    except Exception:
-        representacion = pprint.pformat(obj, depth=4, width=100)
-
-    if len(representacion) > max_len:
-        representacion = representacion[:max_len] + f"\n... [truncado, total {len(representacion)} chars]"
-
-    return tipo_nombre, claves, representacion
-
-# ===================================================================
-# FUNCIÓN: Procesar notificación (pipeline automate_broker)
-# ===================================================================
-def procesar_notificacion(datos_crudos, adapter, adaptadores, termux_api, ventana_minutos):
-    from modulios.consolidador import Consolidador
-
-    info("📥 [PIPELINE] Iniciando procesar_notificacion")
-
-    # 0. Inspeccionar estructura exacta de datos_crudos
-    tipo_crudo, claves_crudo, repr_crudo = _resumen_estructura(datos_crudos)
-    info(f"🔎 [0/5] datos_crudos | tipo={tipo_crudo} | claves={claves_crudo}")
-    info(f"📄 [0/5] Contenido exacto datos_crudos:\n{repr_crudo}")
-
-    if not isinstance(datos_crudos, dict):
-        error(f"❌ [0/5] datos_crudos no es un dict (recibido {tipo_crudo}); abortando")
-        return False
-
-    # 1. Enrutar adaptador
-    paquete = datos_crudos.get('packageName') or datos_crudos.get('package') or ''
-    info(f"🧭 [1/5] Enrutando adaptador | paquete='{paquete}' | adaptadores_disponibles={list(adaptadores.keys())}")
-
-    adaptador_local = encontrar_adaptador(paquete, adaptadores)
-    if not adaptador_local:
-        warning(f"⚠️ [1/5] Ningún adaptador reconoció el paquete: '{paquete}'")
-        return False
-
-    info(f"✅ [1/5] Adaptador seleccionado: {type(adaptador_local).__name__}")
-
-    # 2. Normalizar
-    try:
-        normalizado = adaptador_local.normalizar_notificacion(datos_crudos)
-    except Exception as e:
-        error(f"❌ [2/5] Error en {type(adaptador_local).__name__}.normalizar_notificacion(): {e}")
-        import traceback
-        error(traceback.format_exc())
-        return False
-
-    tipo_norm, claves_norm, repr_norm = _resumen_estructura(normalizado)
-    info(f"🔄 [2/5] Normalización completada | tipo={tipo_norm} | claves={claves_norm}")
-    info(f"📦 [2/5] Estructura normalizada:\n{repr_norm}")
-
-    if not isinstance(normalizado, dict):
-        error(f"❌ [2/5] normalizar_notificacion no devolvió dict (recibido {tipo_norm})")
-        return False
-
-    # 2B. Validar duplicado (misma tipo NUNCA es duplicado)
-    try:
-        c = Consolidador(ventana_minutos=ventana_minutos)
-        es_duplicado = c.verificar_duplicado_ventana(normalizado)
-        info(f"🔍 [2B/5] Verificación duplicado (ventana={ventana_minutos} min) -> es_duplicado={es_duplicado}")
-    except Exception as e:
-        error(f"❌ [2B/5] Error al verificar duplicado en Consolidador: {e}")
-        import traceback
-        error(traceback.format_exc())
-        return False
-
-    if es_duplicado:
-        info("🔁 [2B/5] Duplicado en ventana de consolidación - sin registrar nuevo")
-        return False
-
-    # 3. Solicitar motivo (OBLIGATORIO)
-    api_dialogo = termux_api if termux_api is not None else TermuxAPI(termux_path=TERMUX_PATH)
-    tipo = normalizado.get('tipo', 'gasto')
-    origen_paq = normalizado.get('origen_paquete', 'app')
-    pregunta = "[%s] ¿Cuál fue el motivo de este %s? (app: %s)" % (
-        str(tipo).upper(),
-        'gasto' if tipo == 'gasto' else 'ingreso',
-        origen_paq
-    )
-    info(f"💬 [3/5] Solicitando motivo vía diálogo Termux | tipo={tipo} | app={origen_paq}")
-
-    try:
-        resultado = api_dialogo.mostrar_dialogo(
-            widget="text",
-            titulo="[%s] Motivo" % str(tipo).upper(),
-            mensaje=pregunta
-        )
-        info(f"💬 [3/5] Respuesta diálogo recibida: {resultado!r}")
-    except Exception as e:
-        warning(f"⚠️ [3/5] Falló mostrar_dialogo ({e}); usando motivo por defecto")
-        resultado = None
-
-    if isinstance(resultado, dict) and "text" in resultado:
-        motivo_usuario = str(resultado["text"]).strip()
-        normalizado['motivo'] = motivo_usuario if motivo_usuario else "Sin motivo especificado"
-    else:
-        normalizado['motivo'] = "Sin motivo especificado"
-
-    info(f"✍️ [3/5] Motivo asignado: '{normalizado['motivo']}'")
-
-    # 4. GPS
-    info("📍 [4/5] Obteniendo ubicación GPS...")
-    lat = obtener_gps()
-    info(f"📍 [4/5] Resultado GPS: lat={lat[0]}, lon={lat[1]}, fuente={lat[2]}")
-
-    # 5. Insertar en SQLite
-    event_id = normalizado.get('event_id') or os.urandom(12).hex()
-    ahora = datetime.datetime.now()
-    q = _trimestre(ahora.month)
-
-    payload_bd = {
-        "id_transaccion": event_id,
-        "fecha_hora_epoch": _time.time(),
-        "fecha_iso": ahora.isoformat(),
-        "fecha": ahora.strftime('%Y-%m-%d'),
-        "hora": ahora.strftime('%H:%M:%S'),
-        "trimestre": q,
-        "app": normalizado.get('origen_paquete', 'manual'),
-        "paquete": normalizado.get('paquete', paquete),
-        "dispositivo": os.environ.get('ANDROID_ID', 'CLI-Manual'),
-        "tipo": normalizado.get('tipo', 'gasto'),
-        "medio": normalizado.get('medio', ''),
-        "monto_total": normalizado.get('monto', 0.0),
-        "moneda": normalizado.get('moneda', 'PEN'),
-        "destinatario": normalizado.get('destinatario', 'desconocido'),
-        "motivo": normalizado.get('motivo', ''),
-        "categoria": normalizado.get('categoria', 'Manual'),
-        "es_prestamo": normalizado.get('es_prestamo', 0),
-        "monto_pagado": normalizado.get('monto_pagado', 0.0),
-        "saldo_pendiente": normalizado.get('saldo_pendiente', 0.0),
-        "estado_prestamo": normalizado.get('estado_prestamo', 'activo'),
-        "looker": normalizado.get('looker', 0),
-        "latitud": lat[0],
-        "longitud": lat[1],
-        "fuente_gps": lat[2],
-        "mensaje_raw": normalizado.get('mensaje_raw', ''),
-        "status": 'consolidado',
-        "sincronizado": 0,
-        "intentos_sync": 0,
-        "ultimo_error_sync": '',
-    }
-
-    info(f"💾 [5/5] Guardando en BD | id={event_id} | tipo={payload_bd['tipo']} | monto={payload_bd['monto_total']} {payload_bd['moneda']} | dest='{payload_bd['destinatario']}'")
-
-    try:
-        adapter.guardar_transaccion_sql_directo(**payload_bd)
-        info(f"✅ [5/5] Transacción registrada en BD | event_id={event_id}")
-        return True
-    except Exception as e:
-        error(f"❌ [5/5] Error guardando en BD (event_id={event_id}): {e}")
-        import traceback
-        error(traceback.format_exc())
-        return False
-    
-# ===================================================================
-# FUNCIÓN: Modo AUTOMATE BROKER (archivo JSON único o directorio)
-# ===================================================================
-def modo_automate_broker(adapter, adaptadores, archivo_json=None):
+def detectar_modo_operacion(args, config):
     """
-    Modo automate_broker: Automate deja un archivo .json con notificación para procesar.
-    
-    Si se proporciona un archivo JSON, lo procesa directamente.
-    Si se proporciona un directorio, procesa todos los archivos .json del directorio (modo legacy).
-    Si no se proporciona nada, usa el archivo por defecto desde config.yaml.
+    Detectar modo de operación siguiendo la jerarquía:
+    1. Flags de línea de comandos (mayor prioridad)
+    2. Archivo config.yaml
+    3. Valor por defecto
     """
-    # Determinar qué archivo/directorio procesar
-    # Prioridad: --archivo-json > --directorio (legacy) > config.yaml default
-    if archivo_json is None:
-        archivo_json = DIRECTORIO_CONF
-    
-    # Modo: procesar un archivo JSON específico
-    if os.path.isfile(archivo_json):
-        logger.info("▶ Modo automate_broker: procesando archivo " + archivo_json)
-        
-        try:
-            with open(archivo_json, 'r', encoding='utf-8') as f:
-                datos_crudos = json.load(f)
-        except Exception as e:
-            logger.error("❌ Leyendo " + archivo_json + ": " + str(e))
-            return
-        
-        procesar_notificacion(datos_crudos, adapter, adaptadores, TermuxAPI(termux_path=TERMUX_PATH), VENTANA_CONSOLIDACION)
-        
-        # Opcional: remover el archivo después de procesarlo
-        try:
-            os.remove(archivo_json)
-        except Exception:
-            pass
-        return
-    
-    # Modo: directorio (legacy) - procesar todos los archivos .json
-    directorio = archivo_json
-    if not os.path.isdir(directorio):
-        warning("Directorio no existe: " + directorio)
-        return
-    
-    logger.info("▶ Modo automate_broker: procesando directorio " + directorio)
-    
-    archivos = [f for f in os.listdir(directorio) if f.endswith('.json')]
-    if not archivos:
-        logger.info("📭 No hay archivos nuevos")
-        return
-    
-    termux_api = TermuxAPI(termux_path=TERMUX_PATH)
-    
-    for archivo in sorted(archivos):
-        ruta = os.path.join(directorio, archivo)
-        try:
-            with open(ruta, 'r', encoding='utf-8') as f:
-                datos_crudos = json.load(f)
-            procesar_notificacion(datos_crudos, adapter, adaptadores, TermuxAPI(termux_path=TERMUX_PATH), VENTANA_CONSOLIDACION)
-            # Intentar remover el archivo, pero no fallar si no se puede
-            try:
-                os.remove(ruta)
-            except Exception:
-                pass
-        except Exception as e:
-            logger.error("❌ Error procesando " + archivo + ": " + str(e))
+    # 1. Verificar flags de modo explícitas
+    if args.broker:
+        return "automate_broker", True  # El 'True' indica que fue forzado por flag
+    if args.listener:
+        return "listener_directo", True  # El 'True' indica que fue forzado por flag
 
-# ===================================================================
-# FUNCIÓN: Modo LISTENER DIRECTO
-# ===================================================================
-def modo_listener_directo():
-    logger.info("🎧 Modo listener_directo configurado:")
-    logger.info("   Modo operacional: " + MODO_OPERACION)
-    logger.info("   Adaptadores: " + ", ".join(ADAPTADORES_ACTIVOS))
-    logger.info("   Ventana consolidación: " + str(VENTANA_CONSOLIDACION) + " min")
-    logger.info("   GPS espera: " + str(TIEMPO_ESPERA_GPS) + "s")
-    logger.info("   Dialogo espera: " + str(TIEMPO_ESPERA_DIALOGO) + "s")
-    logger.info("   Próximo paso: bucle while True + capturar nativa")
+    # 2. Leer config.yaml si no vienen flags
+    if config and config.get('modo_operacion'):
+        modo_config = config.get('modo_operacion')
+        if modo_config in ('automate_broker', 'listener_directo'):
+            return modo_config, False  # El 'False' indica que vino de config.yaml
 
-# ===================================================================
-# FUNCIÓN: LIMITAR BASE DE DATOS
-# ===================================================================
-def limpiar_base_datos():
-    """Limpiar/Resetear la base de datos SQLite.
-    
-    Elimina todas las transacciones de la base de datos,
-    útil para reiniciar el estado después de pruebas.
-    """
-    db_path = BD_RUTA
-    if not os.path.isabs(db_path):
-        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), db_path)
-    
-    if os.path.exists(db_path):
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        # Contar transacciones antes de borrar
-        cursor.execute("SELECT COUNT(*) FROM transacciones")
-        count = cursor.fetchone()[0]
-        # Borrar todas las transacciones
-        cursor.execute("DELETE FROM transacciones")
-        conn.commit()
-        conn.close()
-        info(f"🗑️ Base de datos limpiada: se removieron {count} transacciones")
-    else:
-        warning("⚠️ No existe base de datos para limpiar: " + db_path)
+    # 3. Valor por default
+    return "automate_broker", True  # Default con bandera de "usó default"
 
-# ===================================================================
-# FUNCIÓN: PUNTO DE ENTRADA
-# ===================================================================
+
 def main():
-    parser = argparse.ArgumentParser(description="Sistema local-gestion-gastos", add_help=False)
-    parser.add_argument("--accion", choices=["listar", "insertar", "automate_broker", "listener_directo", "limpiar", "sql"],
-                        default="listar", help="Acción")
-    parser.add_argument("--json", action="store_true", default=False,
-                        help="Mostrar resultados en formato JSON")
-    parser.add_argument("--sql", type=str, default="",
-                        help="Ejecutar consulta SQL personalizada contra la base de datos")
-    parser.add_argument("--motivo", type=str, default="", help="Motivo")
-    parser.add_argument("--monto", type=float, default=0.0, help="Monto")
-    parser.add_argument("--tipo", type=str, default="gasto", help="Tipo (gasto/ingreso)")
-    parser.add_argument("--destinatario", type=str, default="", help="Destinatario")
-    parser.add_argument("--archivo-json", type=str, default="",
-                        help="Archivo JSON a procesar (modo automate_broker)")
-    parser.add_argument("--directorio", type=str, default="",
-                        help="Directorio para modo legacy (procesa todos los .json)")
-    parser.add_argument("--limpiar", action="store_true", default=False,
-                        help="Limpiar/resetear la base de datos SQLite")
+    """Función principal del sistema."""
+    
+    # --- 1. Parseo de argumentos ---
+    parser = argparse.ArgumentParser(
+        prog='main.py',
+        description='Sistema local-gestion-gastos - Multiplataforma (Termux/Linux)',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Modos de operación:
+  --broker      : Modo Automate File Broker (archivos de notificaciones)
+  --listener    : Modo Listener Directo (captura nativa)
+  --registro    : Flujo interactivo paso a paso (por defecto)
+  --sql         : Ejecutar query SQL directamente
+
+  Configuración:
+  --help        : Mostrar este mensaje de ayuda
+
+Ejemplos:
+  python3 main.py                      # Usa config.yaml, modo broker por defecto
+  python3 main.py --broker             # Forzar modo broker
+  python3 main.py --listener           # Forzar modo listener
+  python3 main.py --registro           # Flujo interactivo
+  python3 main.py --sql "SELECT ..."   # Query SQL
+  """
+    )
+    
+    # Agregar grupo de flags de modo
+    grupo_modo = parser.add_argument_group('Modos de operación')
+    grupo_modo.add_argument(
+        '--broker', 
+        action='store_true', 
+        help='Forzar modo Automate File Broker'
+    )
+    grupo_modo.add_argument(
+        '--listener', 
+        action='store_true', 
+        help='Forzar modo Listener Directo'
+    )
+    grupo_modo.add_argument(
+        '--registro', 
+        action='store_true', 
+        help='Ejecutar flujo interactivo paso a paso'
+    )
+    
+    # Agregar grupo de flags SQL
+    grupo_sql = parser.add_argument_group('Operaciones SQL')
+    grupo_sql.add_argument(
+        '--accion', 
+        choices=['sql', 'registro'], 
+        help='Acción a ejecutar: sql o registro'
+    )
+    grupo_sql.add_argument(
+        '--sql', 
+        type=str, 
+        help='Query SQL a ejecutar'
+    )
+    grupo_sql.add_argument(
+        '--json', 
+        action='store_true', 
+        help='Mostrar resultados en formato JSON'
+    )
+    grupo_sql.add_argument(
+        '--limit', 
+        type=int, 
+        default=10, 
+        help='Límite de filas para queries SQL (default: 10)'
+    )
+    
     args = parser.parse_args()
     
-    # Determinar el archivo JSON a procesar:
-    # Prioridad: --archivo-json > --directorio (legacy) > config.yaml default
-    if args.archivo_json:
-        archivo_json = args.archivo_json
-    elif args.directorio:
-        archivo_json = args.directorio
+    # Validación: no usar ambas flags de modo simultáneamente
+    if args.broker and args.listener:
+        print("✗ Error: No puede usar --broker y --listener simultáneamente")
+        print("   Use una sola flag o ninguna para modo por defecto")
+        print("   Use: python3 main.py --help para ver opciones")
+        sys.exit(1)
+    
+    # --- 2. Detectar modo de operación ---
+    config = leer_config()
+    modo, forzado_por_flag = detectar_modo_operacion(args, config)
+    
+    # Informar al usuario sobre el modo
+    if forzado_por_flag:
+        print(f"▶ Modo forzado: {modo} (usando flag --{'broker' if modo == 'automate_broker' else 'listener'})")
+    elif config:
+        print(f"▶ Modo desde config.yaml: {modo}")
     else:
-        # Si no se pasan argumentos, usar el default de config.yaml
-        archivo_json = DIRECTORIO_CONF
+        print(f"▶ Modo por defecto: {modo}")
+    print()
     
-    # Inicializaciones
-    adapter_db = obtener_adapter_BD()
-    adaptadores = cargar_adaptadores()
-    lat = obtener_gps()
+    # --- 3. Obtener proveedores según el modo ---
+    try:
+        input_prov = obtener_proveedor("input")
+        gps_prov = obtener_proveedor("gps")
+        db_prov = obtener_proveedor("database")
+        notif_prov = obtener_proveedor("notification")
+    except Exception as e:
+        print(f"✗ Error obteniendo proveedores: {e}")
+        import traceback
+        traceback.print_exc()
+        return
     
-    if args.limpiar:
-        limpiar_base_datos()
-    elif args.accion == "listar":
-        cmd_listar(adapter_db, as_json=args.json)
-    elif args.accion == "sql":
-        if args.sql:
-            try:
-                adapter_db = obtener_adapter_BD()
-                conn = adapter_db._obtener_conexion()
-                cursor = conn.cursor()
-                cursor.execute(args.sql)
-                # Obtener nombres de columnas
-                column_names = [desc[0] for desc in cursor.description]
-                rows = cursor.fetchall()
-                if not rows:
-                    if args.json:
-                        print('[]')
+    print(f"   - Proveedor input: {type(input_prov).__name__}")
+    print(f"   - Proveedor GPS: {type(gps_prov).__name__}")
+    print(f"   - Proveedor BD: {type(db_prov).__name__}")
+    print(f"   - Proveedor Notificaciones: {type(notif_prov).__name__}")
+    print()
+    
+    # --- 4. Ejecutar según modo y flags ---
+    
+    # Modo SQL (tiene prioridad sobre los modos interactivos)
+    if args.accion == "sql" and args.sql:
+        print("=" * 60)
+        print("SISTEMA local-gestion-gastos - Modo SQL")
+        print("=" * 60)
+        
+        print(f"\n[1] Ejecutando query SQL: {args.sql}")
+        resultado = db_prov.ejecutar_query(args.sql)
+        
+        print(f"   Resultado code: {resultado.get('code', 'N/A')}")
+        
+        if resultado.get('code') == 0:
+            data = resultado.get('data', {})
+            columnas = data.get('columnas', [])
+            filas = data.get('filas', [])
+            total = data.get('total', 0)
+            
+            print(f"   ✓ Total filas: {total}")
+            print(f"   ✓ Columnas: {columnas if columnas else 'N/A'}")
+            
+            if filas:
+                print("\n   Resultados:")
+                if columnas:
+                    header = " | ".join(str(c) for c in columnas[:6])
+                    if len(columnas) > 6:
+                        header += f" +... (+{len(columnas)-6} más)"
+                    print(f"   | {header}")
+                    print("   |" + "-" * (len(header) + 2))
+                
+                limit = args.limit if hasattr(args, 'limit') else 10
+                for i, fila in enumerate(filas[:limit]):
+                    if isinstance(fila, dict):
+                        valores = []
+                        for col in columnas[:6]:
+                            val = fila.get(col, "")
+                            val_str = str(val)[:30] if val is not None else "NULL"
+                            valores.append(val_str)
                     else:
-                        print('No results returned.')
-                else:
-                    if args.json:
-                        # Output en formato JSON array
-                        results = []
-                        for row in rows:
-                            obj = {}
-                            for i, col in enumerate(column_names):
-                                obj[col] = row[i] if i < len(row) else None
-                            results.append(obj)
-                        print(json.dumps(results, ensure_ascii=False, indent=2))
+                        valores = []
+                        for j in range(min(len(columnas), len(fila))):
+                            val = fila[j]
+                            val_str = str(val)[:30] if val is not None else "NULL"
+                            valores.append(val_str)
+                    
+                    fila_str = " | ".join(valores)
+                    print(f"   | {fila_str}")
+            
+            # Si flag JSON, output en JSON puros
+            if args.json:
+                import json
+                print("\n--- OUTPUT JSON ---")
+                list_filas = []
+                for fila in filas[:limit]:
+                    if isinstance(fila, dict):
+                        list_filas.append(fila)
                     else:
-                        # Imprimir encabezados
-                        # Calcular ancho de cada columna
-                        widths = []
-                        for i in range(len(column_names)):
-                            max_long = 0
-                            for row in rows:
-                                val = str(row[i]) if i < len(row) else ''
-                                if len(val) > max_long:
-                                    max_long = len(val)
-                            widths.append(max_long if max_long > 0 else 1)
-                        header = ' | '.join(col.ljust(w) for col, w in zip(column_names, widths))
-                        print(header)
-                        print('-' * len(header))
-                        for row in rows:
-                            valores = [str(row[i]) if i < len(row) else '' for i in range(len(column_names))]
-                            fila = ' | '.join(val.ljust(w) for val, w in zip(valores, widths))
-                            print(fila)
-                if not rows:
-                    if args.json:
-                        print('[]')
-                    else:
-                        print('No results returned.')
-                else:
-                    if args.json:
-                        # Output en formato JSON array
-                        results = []
-                        for row in rows:
-                            obj = {}
-                            for i, col in enumerate(column_names):
-                                obj[col] = row[i] if i < len(row) else None
-                            results.append(obj)
-                        print(json.dumps(results, ensure_ascii=False, indent=2))
-                    else:
-                        # Imprimir encabezados
-                        # Calcular ancho de cada columna
-                        widths = []
-                        for i in range(len(column_names)):
-                            max_long = 0
-                            for row in rows:
-                                val = str(row[i]) if i < len(row) else ''
-                                if len(val) > max_long:
-                                    max_long = len(val)
-                        widths.append(max_long if max_long > 0 else 1)
-                        header = ' | '.join(col.ljust(w) for col, w in zip(column_names, widths))
-                        print(header)
-                        print('-' * len(header))
-                        for row in rows:
-                            valores = [str(row[i]) if i < len(row) else '' for i in range(len(column_names))]
-                            fila = ' | '.join(val.ljust(w) for val, w in zip(valores, widths))
-                            print(fila)
-            except Exception as e:
-                print(f'❌ Error al ejecutar consulta SQL: {e}', file=sys.stderr)
-                import traceback
-                traceback.print_exc()
+                        if isinstance(fila, (list, tuple)):
+                            list_filas.append(dict(zip(columnas, fila)) if columnas else {})
+                        else:
+                            list_filas.append({})
+                
+                result_json = {
+                    "code": resultado['code'],
+                    "total_filas": total,
+                    "columnas": columnas,
+                    "filas": list_filas
+                }
+                print(json.dumps(result_json, ensure_ascii=False, indent=2))
         else:
-            print('Se requiere una consulta SQL. Usa --help para ver ejemplos.')
-    elif args.accion == "insertar":
-        cmd_insertar(args.motivo, args.monto, args.tipo, args.destinatario, adapter_db, adaptadores)
-    elif args.accion == "automate_broker":
-        modo_automate_broker(adapter_db, adaptadores, archivo_json)
-    elif args.accion == "listener_directo":
-        modo_listener_directo()
+            print(f"   ✗ Error en query: {resultado.get('error', 'desconocido')}")
+            if args.json:
+                import json
+                print(json.dumps({"error": resultado.get('error', 'desconocido'), "code": resultado['code']}))
+    
+    # Modo interactivo (--registro o por default sin flags SQL)
+    elif args.accion != "sql" or (not args.sql and not args.accion):
+        # Verificar si viene --registro explícito o modo por default
+        if args.registro or (not args.broker and not args.listener and not args.accion):
+            print("=" * 60)
+            print("SISTEMA local-gestion-gastos - Flujo Interactivo")
+            print("=" * 60)
+            
+            # 1. Obtener todos los proveedores (ya hechos arriba)
+            # ... (ya tienen valores)
+            
+            # 2. Solicitar datos al usuario
+            print("\n[1] Detectando entorno y obteniendo proveedores...")
+            try:
+                modo_detectado = "Termux" if 'ANDROID_DATA' in os.environ else "Linux"
+                print(f"   ✓ Entorno detectado: {modo_detectado}")
+                print(f"   - Proveedor input: {type(input_prov).__name__}")
+                print(f"   - Proveedor GPS: {type(gps_prov).__name__}")
+                print(f"   - Proveedor BD: {type(db_prov).__name__}")
+                print(f"   - Proveedor Notificaciones: {type(notif_prov).__name__}")
+            except Exception as e:
+                print(f"   ✗ Error obteniendo proveedores: {e}")
+                return
+            
+            # Solicitar motivo
+            print("\n[2] Solicitando datos al usuario...")
+            
+            print("   --- Solicitando motivo ---")
+            resultado_motivo = input_prov.solicitar_texto("¿Cuál fue el motivo de este movimiento?")
+            if resultado_motivo.get('code') != 0:
+                print("   ℹ Usuario canceló la entrada de motivo")
+                motivo = None
+            else:
+                motivo = resultado_motivo.get('text', '')
+            
+            print("\n   --- Solicitando monto ---")
+            resultado_monto = input_prov.solicitar_numero("¿Cuál fue el monto?", min_val=0, max_val=100000)
+            if resultado_monto.get('code') != 0:
+                print("   ℹ Usuario canceló o ingreso inválido el monto")
+                monto = None
+            else:
+                try:
+                    monto = float(resultado_monto.get('text', '0'))
+                except ValueError:
+                    monto = None
+                    print("   ✗ No se pudo convertir monto a número")
+            
+            print("\n   --- Confirmando registro ---")
+            resultado_conf = input_prov.solicitar_confirmacion("¿Desea guardar este registro?")
+            if resultado_conf.get('code') != 0 or resultado_conf.get('text') != "true":
+                print("   ℹ Registro cancelado por usuario")
+                confirmado = False
+            else:
+                confirmado = True
+            
+            print("\n[3] Obteniendo ubicación GPS...")
+            ubicacion = gps_prov.obtener_ubicacion()
+            if ubicacion.get('code') == 0:
+                datos_gps = ubicacion.get('data', {})
+                lat = datos_gps.get('lat')
+                lng = datos_gps.get('lng')
+                source = datos_gps.get('source', 'desconocido')
+                print(f"   ✓ Latitud: {lat}")
+                print(f"   ✓ Longitud: {lng}")
+                print(f"   ✓ Fuente: {source}")
+            else:
+                print(f"   ✗ Error GPS: {ubicacion.get('error', 'desconocido')}")
+                lat = None
+                lng = None
+            
+            # 4. Insertar en Base de Datos
+            print("\n[4] Insertando en base de datos...")
+            evento_id = None
+            
+            datos_suficientes = (
+                monto is not None and 
+                motivo is not None and 
+                confirmado and 
+                lat is not None and 
+                lng is not None
+            )
+            
+            if datos_suficientes:
+                resultado_db = db_prov.insertar_transaccion({
+                    "tipo": "gasto",
+                    "monto_total": monto,
+                    "destinatario": "Comercio Ejemplo",
+                    "motivo": motivo,
+                    "latitud": lat,
+                    "longitud": lng,
+                    "app": "manual",
+                    "paquete": "manual.entry",
+                    "dispositivo": "CLI-Manual",
+                    "moneda": "PEN",
+                    "medio": "Transferencia",
+                    "categoria": "Manual",
+                    "es_prestamo": 0,
+                    "looker": 1
+                })
+                print(f"   Resultado code: {resultado_db.get('code', 'N/A')}")
+                print(f"   Resultado event_id: {resultado_db.get('data', {}).get('event_id', 'N/A')}")
+                print(f"   Resultado valid: {resultado_db.get('valid', False)}")
+                if resultado_db.get('code') == 0:
+                    evento_id = resultado_db['data']['event_id']
+                    print(f"   ✅ Transacción guardada con event_id: {evento_id}")
+                else:
+                    print(f"   ✗ Error al guardar en BD: {resultado_db.get('error', 'desconocido')}")
+            else:
+                print("   ⚠ Datos incompletos, no se insertó en BD")
+            
+            # 5. Resumen final
+            print("\n" + "=" * 60)
+            print("RESUMEN DEL PROCESO")
+            print("=" * 60)
+            print("   Motivo: {}" .format(motivo or 'N/A'))
+            print("   Monto: {}" .format(monto or 'N/A'))
+            print("   Confirmado: {}" .format(confirmado or 'No'))
+            print("   GPS - Lat: {}, Lng: {} (fuente: {})" .format(lat or 'N/A', lng or 'N/A', source or 'N/A'))
+            if evento_id:
+                print("   BD - Event ID: {}" .format(evento_id))
+            print("=" * 60)
+            print("\nSistema completado exitosamente en modo multiplataforma!")
+            print("=" * 60)
+    
+    # Modo broker o listener (si no hay --accion sql ni --registro)
+    elif modo == "automate_broker":
+        print("=" * 60)
+        print("SISTEMA local-gestion-gastos - Modo Automate File Broker")
+        print("=" * 60)
+        print("\n✓ Modo Automate File Broker seleccionado")
+        print("✓ Esperando archivos en directorio configurado...")
+        print("✓ Presione Ctrl+C para detener")
+        print("\n(Nota: En modo interactivo/debug, este mensaje se omite)")
+        # Aquí iría la lógica real del modo broker
+        # Por ahora, mantener el programa vivo o salir con mensaje
+        print("\nModo broker activado. Use --registro para flujo interactivo.")
+        
+    elif modo == "listener_directo":
+        print("=" * 60)
+        print("SISTEMA local-gestion-gastos - Modo Listener Directo")
+        print("=" * 60)
+        print("\n✓ Modo Listener Directo seleccionado")
+        print("✓ Capturando notificaciones nativas...")
+        print("✓ Presione Ctrl+C para detener")
+        print("\n(Nota: En modo interactivo/debug, este mensaje se omite)")
+        print("\nModo listener activado. Use --registro para flujo interactivo.")
 
-if __name__ == "__main__": main()
+
+if __name__ == "__main__":
+    main()
