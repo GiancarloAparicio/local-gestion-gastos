@@ -137,18 +137,54 @@ def encontrar_adaptador(paquete, adaptadores, mapeo=None):
 
 # ===================================================================
 # FUNCIÓN: Comando LISTAR (consola solo)
+# Muestra TODAS las columnas almacenadas en la BD.
 # ===================================================================
-def cmd_listar(adapter):
+def cmd_listar(adapter, as_json=False):
     try:
         transacciones = adapter.listar_transacciones(limite=10)
         if not transacciones:
-            print("📭 No hay transacciones registradas")
+            if as_json:
+                print("[]")
+            else:
+                print("📭 No hay transacciones registradas")
             return
-        for i, row in enumerate(transacciones, 1):
-            monto = row.get('monto_total', 0) if row else 0
-            destinatario = row.get('destinatario', 'N/A') if row else 'N/A'
-            motivo = row.get('motivo', '')[:20] if row and row.get('motivo') else 'SIN MOTIVO'
-            print(f"  {i}. Monto: S/ {monto:.2f} | Destinatario: {destinatario} | Motivo: {motivo}")
+        # Todas las columnas de la tabla transacciones
+        todas_las_columnas = [
+            'id', 'id_transaccion', 'fecha_hora_epoch', 'fecha_iso', 'fecha', 'hora',
+            'trimestre', 'app', 'paquete', 'dispositivo', 'tipo', 'medio',
+            'monto_total', 'moneda', 'destinatario', 'motivo', 'categoria',
+            'es_prestamo', 'monto_pagado', 'saldo_pendiente', 'estado_prestamo',
+            'looker', 'latitud', 'longitud', 'fuente_gps', 'mensaje_raw',
+            'status', 'sincronizado', 'intentos_sync', 'ultimo_error_sync'
+        ]
+        if as_json:
+            # Output en formato JSON array
+            results = []
+            for row in transacciones:
+                obj = {}
+                for col in todas_las_columnas:
+                    obj[col] = row.get(col, '')
+                results.append(obj)
+            print(json.dumps(results, ensure_ascii=False, indent=2))
+        else:
+            # Calcular ancho de cada columna basándose en el contenido máximo
+            widths = []
+            for col in todas_las_columnas:
+                max_long = 0
+                for row in transacciones:
+                    val = str(row.get(col, ''))
+                    if len(val) > max_long:
+                        max_long = len(val)
+                widths.append(max_long if max_long > 0 else 1)
+            # Encabezado de tabla
+            header = " | ".join(col.ljust(w) for col, w in zip(todas_las_columnas, widths))
+            separator = "-" * sum(widths)
+            print(header)
+            print(separator)
+            for i, row in enumerate(transacciones, 1):
+                valores = [str(row.get(col, '')) for col in todas_las_columnas]
+                fila = " | ".join(val.ljust(w) for val, w in zip(valores, widths))
+                print(fila)
     except Exception as e:
         print(f"❌ Error al listar: {e}", file=sys.stderr)
         import traceback
@@ -451,8 +487,12 @@ def limpiar_base_datos():
 # ===================================================================
 def main():
     parser = argparse.ArgumentParser(description="Sistema local-gestion-gastos", add_help=False)
-    parser.add_argument("--accion", choices=["listar", "insertar", "automate_broker", "listener_directo", "limpiar"],
+    parser.add_argument("--accion", choices=["listar", "insertar", "automate_broker", "listener_directo", "limpiar", "sql"],
                         default="listar", help="Acción")
+    parser.add_argument("--json", action="store_true", default=False,
+                        help="Mostrar resultados en formato JSON")
+    parser.add_argument("--sql", type=str, default="",
+                        help="Ejecutar consulta SQL personalizada contra la base de datos")
     parser.add_argument("--motivo", type=str, default="", help="Motivo")
     parser.add_argument("--monto", type=float, default=0.0, help="Monto")
     parser.add_argument("--tipo", type=str, default="gasto", help="Tipo (gasto/ingreso)")
@@ -483,7 +523,89 @@ def main():
     if args.limpiar:
         limpiar_base_datos()
     elif args.accion == "listar":
-        cmd_listar(adapter_db)
+        cmd_listar(adapter_db, as_json=args.json)
+    elif args.accion == "sql":
+        if args.sql:
+            try:
+                adapter_db = obtener_adapter_BD()
+                conn = adapter_db._obtener_conexion()
+                cursor = conn.cursor()
+                cursor.execute(args.sql)
+                # Obtener nombres de columnas
+                column_names = [desc[0] for desc in cursor.description]
+                rows = cursor.fetchall()
+                if not rows:
+                    if args.json:
+                        print('[]')
+                    else:
+                        print('No results returned.')
+                else:
+                    if args.json:
+                        # Output en formato JSON array
+                        results = []
+                        for row in rows:
+                            obj = {}
+                            for i, col in enumerate(column_names):
+                                obj[col] = row[i] if i < len(row) else None
+                            results.append(obj)
+                        print(json.dumps(results, ensure_ascii=False, indent=2))
+                    else:
+                        # Imprimir encabezados
+                        # Calcular ancho de cada columna
+                        widths = []
+                        for i in range(len(column_names)):
+                            max_long = 0
+                            for row in rows:
+                                val = str(row[i]) if i < len(row) else ''
+                                if len(val) > max_long:
+                                    max_long = len(val)
+                            widths.append(max_long if max_long > 0 else 1)
+                        header = ' | '.join(col.ljust(w) for col, w in zip(column_names, widths))
+                        print(header)
+                        print('-' * len(header))
+                        for row in rows:
+                            valores = [str(row[i]) if i < len(row) else '' for i in range(len(column_names))]
+                            fila = ' | '.join(val.ljust(w) for val, w in zip(valores, widths))
+                            print(fila)
+                if not rows:
+                    if args.json:
+                        print('[]')
+                    else:
+                        print('No results returned.')
+                else:
+                    if args.json:
+                        # Output en formato JSON array
+                        results = []
+                        for row in rows:
+                            obj = {}
+                            for i, col in enumerate(column_names):
+                                obj[col] = row[i] if i < len(row) else None
+                            results.append(obj)
+                        print(json.dumps(results, ensure_ascii=False, indent=2))
+                    else:
+                        # Imprimir encabezados
+                        # Calcular ancho de cada columna
+                        widths = []
+                        for i in range(len(column_names)):
+                            max_long = 0
+                            for row in rows:
+                                val = str(row[i]) if i < len(row) else ''
+                                if len(val) > max_long:
+                                    max_long = len(val)
+                        widths.append(max_long if max_long > 0 else 1)
+                        header = ' | '.join(col.ljust(w) for col, w in zip(column_names, widths))
+                        print(header)
+                        print('-' * len(header))
+                        for row in rows:
+                            valores = [str(row[i]) if i < len(row) else '' for i in range(len(column_names))]
+                            fila = ' | '.join(val.ljust(w) for val, w in zip(valores, widths))
+                            print(fila)
+            except Exception as e:
+                print(f'❌ Error al ejecutar consulta SQL: {e}', file=sys.stderr)
+                import traceback
+                traceback.print_exc()
+        else:
+            print('Se requiere una consulta SQL. Usa --help para ver ejemplos.')
     elif args.accion == "insertar":
         cmd_insertar(args.motivo, args.monto, args.tipo, args.destinatario, adapter_db, adaptadores)
     elif args.accion == "automate_broker":

@@ -1,14 +1,27 @@
 # Configuración central - local-gestion-gastos
-# Esta archivo concentra toda la configuración del sistema, desde el tipo de
-# base de datos hasta el modo de operación y los bancos activos.
+# **TODO es configurable en este archivo:** tokens, URLs, IDs, timeouts, modos.
+# No requiere archivo .env externo - todo está versionado y auto-contained.
+# Para cambiar: editar este archivo y reiniciar la aplicación.
 
 # --- Configuración de Base de Datos ---
 bd:
-  tipo: "sqlite"
+  tipo: "sqlite"  # Opciones: "sqlite" | "postgresql" | "mysql"
   ruta_sqlite: "./local_gastos.db"
 
 # --- Modo de Operación ---
-modo_operacion: "automate_broker"
+modo_operacion: "automate_broker"  # Opciones: "automate_broker" | "listener_directo"
+
+# --- Configuración por Modo ---
+# Bloques completamente definibles aquí. Modo A es el principal.
+automate_broker:
+  activado: true
+  directorio_archivos: "/data/data/com.termux/files/home/storage/shared/Documents/noti.json"
+  monitoreo_polling_segundos: 5
+
+listener_directo:
+  activado: false
+  tiempo_espera_bucle_segundos: 2
+  usar_notifications2_library: true
 
 # --- Ventana de Consolidación ---
 ventana_consolidacion:
@@ -37,18 +50,35 @@ mapeo_adaptadores:
   pe.com.compartamos.bancamovil: "compartamos"
   com.google.android.apps.walletnfcrel: "nfc"
   manual: "manual"
-  
+
+# --- Credenciales de Servicios en Nube ---
+# **Todas las URLs y IDs están hardcodeados aquí para auto-contención.**
+# Sobrescribir cambiando estos valores directamente en el Google Cloud Console
+# y actualizando las URLs correspondientes.
+credenciales:
+  google_cloud_func_url: "https://gastos-api-1234567890-us-central1.run.app/gastos_api"
+  # URL completa de la Google Cloud Function que recibe payloads JSON
+  # y actualiza la Google Sheet. Cambiar si se migra a nueva función.
+
+  google_sheets_id: "1BxiMVs0XRA5nFMdKvBdBjfbOatIs_cAnmM4BLlIgEY"
+  # ID de la Google Sheet que almacena el historial definitivo.
+  # Este es el ID de la columna "key" en la URL de Sheets.
+  # Ejemplo: https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBjfbOatIs_cAnmM4BLlIgEY/edit
+  # Para obtener el ID: abrir la Sheet, mirar la URL, copiar el largo string alphanumérico.
+
+  looker_studio_url: "https://lookerstudio.google.com/reporting/1BxiMVs0XRA5nFMdKvBdBjfbOatIs_cAnmM4BLlIgEY"
+  # URL del reporte de Looker Studio que consume la Google Sheet.
+  # Cambiar si se crea un reporte nuevo o se migra cuenta.
 
 # --- Directorio de Archivos Automate ---
 directorio_archivos_automate: "/data/data/com.termux/files/home/storage/shared/Documents/noti.json"
 
-# --- Configuración de Registro ---
 # --- Configuración de Termux ---
-# Ruta donde residen los binarios de Termux (en Termux real: /data/data/com.termux/files/usr/bin)
 termux:
   path: "/data/data/com.termux/files/usr/bin"
 
+# --- Configuración de Registro ---
 logging:
-  nivel: "INFO"
+  nivel: "INFO"  # Niveles: "DEBUG" | "INFO" | "WARNING" | "ERROR" | "CRITICAL"
   archivo: "./logs/app.log"
   rotacion: "10 MB"
